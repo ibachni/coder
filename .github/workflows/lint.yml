@@ -1,0 +1,17 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+        # Clope repo onto that VM
+      - uses: actions/checkout@v4
+        # Runs Ruff GitHub Actions (lint all .py files)
+      - uses: astral-sh/ruff-action@v3
+
+      
