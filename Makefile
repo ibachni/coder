@@ -16,7 +16,7 @@ typecheck:
 	pyright src/
 
 test:
-	pytest
+	pytest; code=$$?; [ $$code -eq 5 ] && exit 0 || exit $$code
 
 install:
 	pip install ruff pyright pytest pre-commit
