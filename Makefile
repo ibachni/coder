@@ -19,5 +19,5 @@ test:
 	pytest; code=$$?; [ $$code -eq 5 ] && exit 0 || exit $$code
 
 install:
-	uv add ruff pyright pytest pre-commit
-	pre-commit install
+	uv sync
+	uv run pre-commit install
