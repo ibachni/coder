@@ -1,0 +1,21 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.11.9
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright
+        entry: pyright src/
+        language: system
+        pass_filenames: false
+
+      - id: pytest
+        name: pytest
+        entry: bash -c 'pytest; code=$?; [ $code -eq 5 ] && exit 0 || exit $code'
+        language: system
+        pass_filenames: false

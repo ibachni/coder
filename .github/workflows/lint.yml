@@ -10,11 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
+      # Install Python 3.13. on the CI VM
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-
+      # Install ruff, pyright, pytest
       - run: make install
-
+      # run the full suite
       - run: make check
