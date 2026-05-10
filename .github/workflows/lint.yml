@@ -1,4 +1,4 @@
-name: Lint
+name: Check
 
 on:
   push:
@@ -6,12 +6,15 @@ on:
   pull_request:
 
 jobs:
-  lint:
+  check:
     runs-on: ubuntu-latest
     steps:
-        # Clope repo onto that VM
       - uses: actions/checkout@v4
-        # Runs Ruff GitHub Actions (lint all .py files)
-      - uses: astral-sh/ruff-action@v3
 
-      
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - run: make install
+
+      - run: make check

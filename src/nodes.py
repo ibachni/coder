@@ -4,36 +4,44 @@ from classes import AgentState
 
 # === Nodes ===
 
+
 def pick_up_ticket(state: AgentState) -> AgentState:
-    '''
+    """
     Picks up the next ticket with high prio. Calls a simple tools which does that.
-    '''
+    """
     state.step += 1
     return state
+
 
 def open_branch(state: AgentState) -> AgentState:
     state.step += 1
     return state
 
+
 def spec(state: AgentState) -> AgentState:
     state.step += 1
     return state
+
 
 def write_tests(state: AgentState) -> AgentState:
     state.step += 1
     return state
 
+
 def write_code(state: AgentState) -> AgentState:
     state.step += 1
     return state
+
 
 def review(state: AgentState) -> AgentState:
     state.step += 1
     return state
 
+
 def commit_push(state: AgentState) -> AgentState:
     state.step += 1
     return state
+
 
 def merge(state: AgentState) -> AgentState:
     state.step += 1
@@ -45,8 +53,8 @@ def merge(state: AgentState) -> AgentState:
 cx = sqlite3.connect(
     "~/.local/share/coder/state.db",
     # Disabling: Do not enforce single-thread check rule
-    check_same_thread=False
-    )
+    check_same_thread=False,
+)
 
 # === Building Graph ===
 
@@ -76,4 +84,3 @@ graph.add_edge("review", "commit_push")
 graph.add_edge("commit_push", "merge")
 
 graph.compile()
-
