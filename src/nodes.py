@@ -3,6 +3,7 @@ import sqlite3
 from langgraph.graph import START, StateGraph
 from classes import AgentState
 from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
 # === Nodes ===
 
@@ -57,7 +58,9 @@ conn = sqlite3.connect(
     check_same_thread=False,
 )
 
-checkpointer = SqliteSaver(conn)
+checkpointer = SqliteSaver(
+    conn, serde=JsonPlusSerializer(allowed_msgpack_modules=[("classes", "Status")])
+)
 
 # === Building Graph ===
 
