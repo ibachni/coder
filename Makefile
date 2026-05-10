@@ -7,16 +7,16 @@ check: lint format typecheck test
 # Target: dependencies
 # make lint runs ruff check src/
 lint:
-	ruff check src/
+	uv run ruff check src/
 
 format:
-	ruff format src/
+	uv run ruff format src/
 
 typecheck:
-	pyright src/
+	uv run pyright src/
 
 test:
-	pytest; code=$$?; [ $$code -eq 5 ] && exit 0 || exit $$code
+	uv run pytest; code=$$?; [ $$code -eq 5 ] && exit 0 || exit $$code
 
 install:
 	uv sync
