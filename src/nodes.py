@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from langgraph.graph import START, StateGraph
 from classes import AgentState
@@ -52,8 +53,7 @@ def merge(state: AgentState) -> AgentState:
 # === Databse ===
 
 conn = sqlite3.connect(
-    "~/.local/share/coder/state.db",
-    # Disabling: Do not enforce single-thread check rule
+    os.path.expanduser("~/.local/share/coder/state.db"),
     check_same_thread=False,
 )
 
@@ -86,4 +86,4 @@ graph.add_edge("write_code", "review")
 graph.add_edge("review", "commit_push")
 graph.add_edge("commit_push", "merge")
 
-graph.compile()
+graph = graph.compile(checkpointer=checkpointer)
