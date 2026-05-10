@@ -10,12 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Install Python 3.13. on the CI VM
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.13.7"
-      # Install ruff, pyright, pytest
-      - run: pip install -r requirements.txt
+      - run: uv sync
       - run: make install
       # run the full suite
       - run: make check

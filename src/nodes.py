@@ -1,6 +1,7 @@
 import sqlite3
 from langgraph.graph import START, StateGraph
 from classes import AgentState
+from langgraph.checkpoint.sqlite import SqliteSaver
 
 # === Nodes ===
 
@@ -50,11 +51,13 @@ def merge(state: AgentState) -> AgentState:
 
 # === Databse ===
 
-cx = sqlite3.connect(
+conn = sqlite3.connect(
     "~/.local/share/coder/state.db",
     # Disabling: Do not enforce single-thread check rule
     check_same_thread=False,
 )
+
+checkpointer = SqliteSaver(conn)
 
 # === Building Graph ===
 
