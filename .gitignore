@@ -22,7 +22,6 @@ MANIFEST
 .mypy_cache/
 .pytype/
 .pyre/
-pyrightconfig.json
 
 # Testing
 .pytest_cache/
