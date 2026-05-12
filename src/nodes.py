@@ -4,6 +4,18 @@ from langgraph.graph import START, StateGraph
 from classes import AgentState
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+import subprocess
+from prompt_loader import render
+from helper.cleanSubscriptionEnv import clean_subscription_env
+from helper.authTokenLoader import load_oauth_token
+
+# === Startup ===
+
+oauth_token = load_oauth_token()
+
+# === Variables ===
+
+MAX_RETRIES = 3
 
 # === Nodes ===
 
@@ -27,7 +39,14 @@ def spec(state: AgentState) -> AgentState:
 
 
 def write_tests(state: AgentState) -> AgentState:
-    state.step += 1
+    prompt = render("write_tests")
+    result = subprocess.run(
+        ["claude", "-p", prompt],
+        env=clean_subscription_env(oauth_token),
+        timeout=600,
+        capture_output=True,
+    )
+    print(result)
     return state
 
 
