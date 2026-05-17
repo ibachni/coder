@@ -3,8 +3,8 @@ from pathlib import Path
 from tools.get_ticket import Repo
 
 REPO_PATHS: dict[Repo, Path] = {
-    Repo.CODER: Path.home() / "Code" / "coder",
-    Repo.RESEARCH: Path.home() / "Code" / "research",
+    Repo.CODER: Path.home() / "Code" / "personal" / "backtester_v1",
+    Repo.RESEARCH: Path.home() / "Code" / "personal" / "research",
 }
 
 
