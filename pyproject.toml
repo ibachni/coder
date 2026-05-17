@@ -34,3 +34,7 @@ line-length = 100
 
 [tool.pyright]
 reportMissingTypeStubs = "none"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

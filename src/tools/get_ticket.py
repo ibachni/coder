@@ -71,7 +71,7 @@ def get_open_ticket(id: Optional[int] = None) -> Ticket:
     Go through open tickets, selects either by ID or highest prio.
     -> relative to current place
     """
-    if id:
+    if id is not None:
         path: Path = _resolve_id(id)
         if not path.exists():
             raise FileNotFoundError(path)
