@@ -4,8 +4,8 @@ from typing import Mapping, Any
 
 
 class Status(Enum):
-    cont = "continue"
-    failure = "failure"
+    CONT = "continue"
+    FAILURE = "failure"
 
 
 class AgentState(BaseModel):
