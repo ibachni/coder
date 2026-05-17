@@ -4,7 +4,7 @@ Minimal CLI entrypoint to run this file
 
 import argparse
 
-from orchestrator import run  # noqa: E402
+from orchestrator import run
 
 
 def _parse_argvs(argv: list[str] | None = None) -> argparse.Namespace:

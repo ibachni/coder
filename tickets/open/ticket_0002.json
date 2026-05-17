@@ -1,0 +1,7 @@
+{
+    "id": 2,
+    "type": "coding",
+    "priority": "3",
+    "title": "Coding tasks",
+    "body": "Add a cli/risk_status.py command (or a --status flag on risk_control.py) that prints a one-shot snapshot of the live risk state. What it would show, all read from existing artifacts so there's nothing new to wire into the trading loop: Current risk mode + last heartbeat from risk_mode.json. Configured live size limits (max order qty/notional, max open orders, per-symbol/per-venue caps) pulled from the active config. Today's count of risk-gate rejections by reason, tailed from risk_audit.jsonl. Open-order count and last fill timestamp from the OMS SQLite DB (persistence.py)"
+}

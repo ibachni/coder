@@ -1,13 +1,15 @@
 import os
 import sqlite3
-from langgraph.graph import START, StateGraph
-from classes import AgentState
-from langgraph.checkpoint.sqlite import SqliteSaver
-from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 import subprocess
-from prompt_loader import render
-from helper.cleanSubscriptionEnv import clean_subscription_env
+
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.graph import START, StateGraph
+
+from classes import AgentState
 from helper.authTokenLoader import load_oauth_token
+from helper.cleanSubscriptionEnv import clean_subscription_env
+from prompt_loader import render
 
 # === Startup ===
 
@@ -18,6 +20,16 @@ oauth_token = load_oauth_token()
 MAX_RETRIES = 3
 
 # === Nodes ===
+
+"""
+Two modes supported for now:
+1. Coding
+2. Researching
+
+Future:
+- Set up (python, typescript, or swift repo)
+- 
+"""
 
 
 def pick_up_ticket(state: AgentState) -> AgentState:
@@ -39,7 +51,7 @@ def spec(state: AgentState) -> AgentState:
 
 
 def write_tests(state: AgentState) -> AgentState:
-    prompt = render("write_tests")
+    prompt = render("write_tests", ticket_id=state.ticket_id)
     result = subprocess.run(
         ["claude", "-p", prompt],
         env=clean_subscription_env(oauth_token),
