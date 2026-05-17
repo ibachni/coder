@@ -10,6 +10,7 @@ from classes import AgentState
 from helper.authTokenLoader import load_oauth_token
 from helper.cleanSubscriptionEnv import clean_subscription_env
 from prompt_loader import render
+from tools.get_ticket import get_open_ticket, get_ticket
 
 # === Startup ===
 
@@ -28,7 +29,6 @@ Two modes supported for now:
 
 Future:
 - Set up (python, typescript, or swift repo)
-- 
 """
 
 
@@ -36,16 +36,30 @@ def pick_up_ticket(state: AgentState) -> AgentState:
     """
     Picks up the next ticket with high prio. Calls a simple tools which does that.
     """
+    if state.ticket_id:
+        ticket = get_ticket(int(state.ticket_id))
+    else:
+        ticket = get_open_ticket()
+    state.ticket = ticket
     state.step += 1
     return state
 
 
 def open_branch(state: AgentState) -> AgentState:
+    """
+    Depending on what repo I am working on.
+    """
+    subprocess.run(["git", "checkout", "branch-name"], check=True)
     state.step += 1
     return state
 
 
 def spec(state: AgentState) -> AgentState:
+    state.step += 1
+    return state
+
+
+def surface_questions(state: AgentState) -> AgentState:
     state.step += 1
     return state
 

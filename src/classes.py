@@ -1,6 +1,9 @@
-from pydantic import BaseModel
 from enum import Enum
-from typing import Mapping, Any
+from typing import Any, Mapping, Optional
+
+from pydantic import BaseModel
+
+from tools.get_ticket import Ticket
 
 
 class Status(Enum):
@@ -12,4 +15,5 @@ class AgentState(BaseModel):
     status: Status
     step: int
     artifact: Mapping[str, Any]
-    ticket_id: str
+    ticket_id: Optional[str] = None
+    ticket: Optional[Ticket] = None

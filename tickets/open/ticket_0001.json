@@ -2,6 +2,7 @@
     "id": 1,
     "type": "research",
     "priority": "3",
+    "repo": "research",
     "title": "Upcoming megatrends in 2026",
     "body": "Please research megatrends which have increases their traction in 2026 the most."
 }

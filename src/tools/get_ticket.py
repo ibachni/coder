@@ -25,10 +25,16 @@ class TicketPriority(IntEnum):
     LOW = 1
 
 
+class Repo(Enum):
+    CODER = "coder"
+    RESEARCH = "research"
+
+
 class TicketContent(BaseModel):
     id: int
     type: TicketType
     priority: TicketPriority
+    repo: Repo
     title: str
     body: str
 
