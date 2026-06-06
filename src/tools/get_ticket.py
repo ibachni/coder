@@ -3,45 +3,23 @@ Get that ticket that is open with the highest priority.
 """
 
 import json
-from enum import Enum, IntEnum
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel
+from classes import Repo, Ticket, TicketContent, TicketPriority, TicketType
+
+__all__ = [
+    "Repo",
+    "Ticket",
+    "TicketContent",
+    "TicketPriority",
+    "TicketType",
+    "get_open_ticket",
+    "get_ticket",
+]
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent  # src/tools/get_ticket.py → repo root
 TICKETS_DIR = PROJECT_ROOT / "tickets" / "open"
-
-
-class TicketType(Enum):
-    RESEARCH = "research"
-    CODING = "coding"
-
-
-class TicketPriority(IntEnum):
-    HIGHEST = 4
-    HIGH = 3
-    MEDIUM = 2
-    LOW = 1
-
-
-class Repo(Enum):
-    CODER = "coder"
-    RESEARCH = "research"
-
-
-class TicketContent(BaseModel):
-    id: int
-    type: TicketType
-    priority: TicketPriority
-    repo: Repo
-    title: str
-    body: str
-
-
-class Ticket(BaseModel):
-    content: TicketContent
-    path: Path
 
 
 def _parse_ticket(path_to_ticket: Path) -> Ticket:

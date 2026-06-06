@@ -1,47 +1,17 @@
 import json
-import os
 import re
-import sqlite3
 import subprocess
-
-from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
-from langgraph.checkpoint.sqlite import SqliteSaver
-from langgraph.graph import START, StateGraph
 from langgraph.types import interrupt
 
+from nodes.helpers import oauth_token, slugify
 from classes import AgentState, Status
-from helper.authTokenLoader import load_oauth_token
 from helper.cleanSubscriptionEnv import clean_subscription_env
 from helper.repoPaths import resolve_repo
 from prompt_loader import render
-from tools.get_ticket import TicketType, get_open_ticket, get_ticket
+from tools.get_ticket import get_open_ticket, get_ticket
+from classes import TicketType
 
-# === Startup ===
-
-oauth_token = load_oauth_token()
-
-# === Variables ===
-
-MAX_RETRIES = 3
-
-# === Helper ===
-
-
-def _slugify(text: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
-    return slug or "untitled"
-
-
-# === Nodes ===
-
-"""
-Two modes supported for now:
-1. Coding
-2. Researching
-
-Future:
-- Set up (python, typescript, or swift repo)
-"""
+### Initial steps
 
 
 def pick_up_ticket(state: AgentState) -> AgentState:
@@ -58,6 +28,14 @@ def pick_up_ticket(state: AgentState) -> AgentState:
     return state
 
 
+def assert_coding(state: AgentState) -> bool:
+    assert state.ticket is not None
+    if state.ticket.content.type == TicketType.CODING:
+        return True
+    else:
+        return False
+
+
 def open_branch(state: AgentState) -> AgentState:
     """
     Mimic a developer's flow: refuse a dirty tree, pull main, then switch to
@@ -66,7 +44,7 @@ def open_branch(state: AgentState) -> AgentState:
     assert state.ticket is not None, "open_branch requires a ticket to be set"
     assert state.repo_path is not None, "open_branch requires repo_path to be set"
 
-    branch = f"ticket_{state.ticket_id}/{_slugify(state.ticket.content.title)}"
+    branch = f"ticket_{state.ticket_id}/{slugify(state.ticket.content.title)}"
     cwd = state.repo_path
 
     try:
@@ -110,7 +88,7 @@ def open_branch(state: AgentState) -> AgentState:
 def surface_questions(state: AgentState) -> AgentState:
     """
     Usually the text body given is not specific enough.
-    In this step, I want to surface any questions.
+    In this step, the goal is to surface any questions.
     The questions are attached to the state as a list of strings.
     -> Human in the loop
     """
@@ -162,42 +140,7 @@ def get_user_answer(state: AgentState) -> AgentState:
     return state
 
 
-# === Coding only nodes ===
-
-
-def spec(state: AgentState) -> AgentState:
-    state.step += 1
-    return state
-
-
-def write_tests(state: AgentState) -> AgentState:
-    prompt = render("write_tests", ticket_id=state.ticket_id)
-    result = subprocess.run(
-        ["claude", "-p", prompt],
-        env=clean_subscription_env(oauth_token),
-        cwd=state.repo_path,
-        timeout=600,
-        capture_output=True,
-    )
-    print(result)
-    return state
-
-
-def write_code(state: AgentState) -> AgentState:
-    state.step += 1
-    return state
-
-
-# === Research / Non-coding edges ===
-
-
-def research(state: AgentState) -> AgentState:
-    """ """
-    state.step += 1
-    return state
-
-
-# === Continuing ====
+### Last steps
 
 
 def review(state: AgentState) -> AgentState:
@@ -213,76 +156,3 @@ def commit_push(state: AgentState) -> AgentState:
 def merge(state: AgentState) -> AgentState:
     state.step += 1
     return state
-
-
-# === Routing Functions ====
-
-
-def assert_coding(state: AgentState) -> bool:
-    assert state.ticket is not None
-    if state.ticket.content.type == TicketType.CODING:
-        return True
-    else:
-        return False
-
-
-# === Databse ===
-
-conn = sqlite3.connect(
-    os.path.expanduser("~/.local/share/coder/state.db"),
-    check_same_thread=False,
-)
-
-checkpointer = SqliteSaver(
-    conn,
-    serde=JsonPlusSerializer(
-        allowed_msgpack_modules=[
-            ("classes", "Status"),
-            ("tools.get_ticket", "TicketType"),
-            ("tools.get_ticket", "TicketPriority"),
-            ("tools.get_ticket", "Repo"),
-            ("tools.get_ticket", "Ticket"),
-        ]
-    ),
-)
-
-
-# === Building Graph ===
-
-graph = StateGraph(AgentState)
-
-# === Adding Nodes ===
-
-graph.add_node("pick_up_ticket", pick_up_ticket)
-graph.add_node("open_branch", open_branch)
-graph.add_node("surface_questions", surface_questions)
-graph.add_node("get_user_answer", get_user_answer)
-# === Coding ===
-graph.add_node("spec", spec)
-graph.add_node("write_tests", write_tests)
-graph.add_node("write_code", write_code)
-# === Research ===
-graph.add_node("research", research)
-
-
-# === combined path ===
-graph.add_node("review", review)
-graph.add_node("commit_push", commit_push)
-graph.add_node("merge", merge)
-
-
-# === Adding edges ===
-
-graph.add_edge(START, "pick_up_ticket")
-graph.add_edge("pick_up_ticket", "open_branch")
-graph.add_edge("open_branch", "surface_questions")
-# === Coding path
-graph.add_conditional_edges("surface_questions", assert_coding, {True: "spec", False: "research"})
-graph.add_edge("spec", "write_tests")
-graph.add_edge("write_tests", "write_code")
-graph.add_edge("write_code", "review")
-graph.add_edge("research", "review")
-graph.add_edge("review", "commit_push")
-graph.add_edge("commit_push", "merge")
-
-graph = graph.compile(checkpointer=checkpointer)

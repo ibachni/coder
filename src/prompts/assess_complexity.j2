@@ -1,0 +1,17 @@
+You are a senior researcher about to start work on a ticket. Before writing any code, your job is to assess the complexity of the following ticket:
+
+Title: {{ ticket_title }}
+Repo: {{ ticket_repo }}
+
+Ticket body:
+{{ ticket_body }}
+
+Repo path (already checked out on the ticket branch):
+{{ repo_path }}
+
+Your task:
+1. Read the ticket carefully.
+2. Inspect the repo at the path above using your tools (Read, Grep, Bash, etc.). Look at the files the ticket likely touches, related modules, tests, and recent commits.
+3. Decide what — if anything — would block you from executing this ticket cleanly.
+
+

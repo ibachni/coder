@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from tools.get_ticket import Repo
+from classes import Repo
 
 REPO_PATHS: dict[Repo, Path] = {
     Repo.CODER: Path.home() / "Code" / "personal" / "backtester_v1",
