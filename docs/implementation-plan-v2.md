@@ -331,19 +331,21 @@ START
  → pick_up_ticket          repo = resolve_repo(ticket.repo) = CODER
                             goals come from the ticket field + repo CLAUDE.md (§2.10)
  → open_branch
- → repo_bootstrap_check    HARD GATE: deps installed, test/lint/typecheck cmds known
+ → repo_bootstrap_check    HARD GATE: test/lint/typecheck cmds known (fail if not)
+                            (install state is recorded as a hint, not gated on — a
+                             missing dep surfaces for real when a gate first runs)
  → big_plan                claude -p → plan.md (HIGH-LEVEL) + changes.json
-                            plan.md includes a "## Open questions & decisions" section
                             • chunks work into changes with a soft LoC target (§3.7)
                             • flags per change: needs_research / needs_planning (§3.3)
-                            • surfaces questions it cannot resolve from
-                              ticket + repo + goals  → into plan.md's questions section
-                            • returns has_open_questions flag (state, for routing)
- → approve_plan            interrupt()  ← THE single HITL gate
-                            human answers the questions IN plan.md AND approves;
-                            answers are written beneath each question, then the plan
-                            body is revised once to weave them in
-                            (bounded: big_plan revises ONCE, then the plan is frozen)
+                            • surfaces questions it cannot resolve from ticket+repo+goals
+                              → structured into state.questions (UI payload, w/ options)
+                              → AND rendered into plan.md's "## Open questions" section
+                            • sets has_open_questions (state, for routing)
+ → approve_plan            interrupt({"questions": state.questions})  ← single HITL gate
+                            UI renders the clean JSON (pro/con/recommended, chat);
+                            human answers + approves; answers are written beneath each
+                            question in plan.md, then the plan body is revised once to
+                            weave them in (bounded: big_plan revises ONCE, then frozen)
  → select_next_change      deterministic
         │ pending → implement_change → (loop) select_next_change
         │ none    → final_review
@@ -352,17 +354,29 @@ START
         │ bugs  → replan ──→ select_next_change   (bounded, unattended)
 ```
 
-**`big_plan` surfaces questions, and they live in the plan (request 1).** A ticket is
+**`big_plan` surfaces questions in two representations (request 1).** A ticket is
 usually ambiguous, and the planner will hit choices it *cannot* resolve from the
-ticket body, the repo, or the goals (§2.10). Rather than guess, it writes them into a
-`## Open questions & decisions` section **inside `plan.md`** — a question is
-meaningless apart from the plan it's about, so it belongs there, not in a separate
-file. `approve_plan` — the single existing HITL gate — does double duty: the human
-answers each question *beneath it* and approves, then the plan body is revised once to
-weave the answers in (the section stays as the decision record). The harness keeps
-only a `has_open_questions` boolean in `AgentState` to decide whether to interrupt —
-it never parses the markdown. This reuses the `surface_questions` / `interrupt()`
-machinery already in [src/nodes/general/nodes.py:88](src/nodes/general/nodes.py#L88).
+ticket body, the repo, or the goals (§2.10). Rather than guess, it produces the
+questions **once, as structured objects**, and uses them two ways — with a strict rule
+about which is canonical, so we don't reintroduce a two-sources-of-truth sync problem:
+
+- **Structured JSON — the transient UI view.** The questions go into `state.questions`
+  (already in [src/classes.py:58](src/classes.py#L58)) and reach the UI via
+  `interrupt({"questions": state.questions})` — exactly what `get_user_answer` already
+  does ([src/nodes/general/nodes.py:137](src/nodes/general/nodes.py#L137)). The schema
+  carries `options` with `pro` / `con` / `recommended` so the Linear-style board can
+  render answer choices and a chat, per [docs/UI.md](docs/UI.md). This view is
+  **ephemeral gate scaffolding** — checkpointed in state, but not a committed artifact.
+- **`plan.md` `## Open questions` section — the durable record.** The same questions
+  are rendered here; the human's answers are written *beneath each one*, then the plan
+  body is revised once to weave them in. **`plan.md` is canonical**; the JSON is a
+  projection of it for one consumer (the UI), not a competing file.
+
+The harness keeps only a `has_open_questions` boolean for routing — it never parses
+the markdown to decide whether to interrupt. This reuses the `surface_questions` /
+`interrupt()` machinery already in
+[src/nodes/general/nodes.py:88](src/nodes/general/nodes.py#L88); `surface_questions.j2`
+just gains an `options` field on each question.
 
 **The big plan stays high-level (request 2).** `big_plan` decides *what* the changes
 are, *in what order*, *how big* (soft LoC, §3.7), and *which need a research or
@@ -765,10 +779,16 @@ class AgentState(BaseModel):
     attempts: int = 0
     replans: int = 0                         # shared cap across inner + outer replan
     autonomy: int = 1                        # the autonomy knob (0=ask more … 3=decide)
-    questions: Optional[list[dict[str, str]]] = None
-    answers: Optional[str] = None
+    questions: Optional[list[dict]] = None   # structured UI payload (q + options:
+                                             # label/pro/con/recommended); §3.2
+    answers: Optional[str] = None            # gate response; woven into plan.md
     complexity: Optional[TicketComplexity] = None
 ```
+
+`questions` is the **transient UI projection** of `plan.md`'s `## Open questions`
+section — checkpointed so the board can render it, but `plan.md` stays canonical
+(§3.2). It widens from `list[dict[str, str]]` to `list[dict]` to hold the nested
+`options` list.
 
 Register `WorkUnit`, `WorkUnitStatus` in the `SqliteSaver`
 `allowed_msgpack_modules` ([src/nodes/__init__.py:38](src/nodes/__init__.py#L38)) —

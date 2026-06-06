@@ -119,7 +119,7 @@ lifetime:
 - **Why no file:** goals don't change per run, so a per-run artifact would be a stale
   copy; storing them with their owner (repo / ticket) keeps a single source of truth.
 
-#### `plan.md` (the big plan + its open questions)
+#### `plan.md` (the big plan + its open questions) — the canonical question record
 - **Producer:** `big_plan`; the `## Open questions & decisions` section is answered
   at `approve_plan`, then the plan body is revised once to weave answers in.
 - **Schema:** markdown — **high-level only**: the changes, their order, their intent.
@@ -134,8 +134,15 @@ lifetime:
   slice), `final_review`. The HITL gate reads the whole file; downstream stages read
   the *resolved* plan, not the raw Q&A.
 - **Anti-bloat:** detail lives in per-change `inner_plan.md`, not here. For gate
-  *routing* the harness keeps only a boolean/count in `AgentState` (`has_open_questions`)
-  — it never has to parse the markdown to decide whether to interrupt.
+  *routing* the harness keeps only a boolean in `AgentState` (`has_open_questions`) —
+  it never has to parse the markdown to decide whether to interrupt.
+- **The structured form is NOT a second file.** The UI needs the questions as clean
+  JSON (with `options`: `pro`/`con`/`recommended`, per [docs/UI.md](docs/UI.md)); that
+  lives in **`state.questions`** (checkpointed in SQLite) and reaches the UI via
+  `interrupt({"questions": state.questions})` — ephemeral gate scaffolding, **not** a
+  committed artifact. `plan.md` is canonical; the JSON is its projection for one
+  consumer. This is the deliberate way to satisfy "questions in both JSON and the
+  plan" without reintroducing two *persisted, editable* sources of truth.
 
 #### `changes.json`
 - **Producer:** `big_plan`; mutated by `reconcile_outer_plan` and `replan`
@@ -293,8 +300,8 @@ ledger.
 | Stage | Reads (context payload) | Writes (ledger) | Passes forward |
 |---|---|---|---|
 | `repo_bootstrap_check` | ticket, repo config | `bootstrap.json` | test/lint/typecheck cmds |
-| `big_plan` | ticket body + ticket goals, `CLAUDE.md`, **live repo** | `plan.md` (incl. `## Open questions`), `changes.json` | high-level plan + change list |
-| `approve_plan` (HITL) | `plan.md` (incl. its questions) | answers written into `plan.md`; revised plan body | answered, woven plan |
+| `big_plan` | ticket body + ticket goals, `CLAUDE.md`, **live repo** | `plan.md` (incl. `## Open questions`), `changes.json`; `state.questions` (structured, for UI) | high-level plan + change list |
+| `approve_plan` (HITL) | `state.questions` (clean JSON → UI), `plan.md` | answers written into `plan.md`; revised plan body | answered, woven plan |
 | `select_next_change` | `changes.json` (status only) | — | current change's `dod` + flags |
 | `inner_plan_and_research` | change entry, `plan.md` slice, ticket goals + `CLAUDE.md`, **live repo/web** | `inner_plan.md`, `research_notes.md` | `inner_plan.md` (≤2k) |
 | `spec_and_tests` | change entry, `inner_plan.md` | `spec.md`, `dod.json`, tests, `test_red.log` | `spec.md` + `dod.json` + test paths |

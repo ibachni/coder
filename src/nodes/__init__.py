@@ -1,11 +1,11 @@
 import os
 import sqlite3
 
-from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import START, StateGraph
 
 from classes import AgentState
+from serde_config import make_serializer
 from nodes.general.nodes import (
     pick_up_ticket,
     assert_coding,
@@ -27,23 +27,15 @@ MAX_RETRIES = 3
 
 # === Database ===
 
-conn = sqlite3.connect(
-    os.path.expanduser("~/.local/share/coder/state.db"),
-    check_same_thread=False,
-)
+# Overridable so tests (and CI) can point at a throwaway DB instead of the real
+# state store; the parent directory is created on demand so import never fails.
+DB_PATH = os.environ.get("CODER_STATE_DB", os.path.expanduser("~/.local/share/coder/state.db"))
+if db_dir := os.path.dirname(DB_PATH):
+    os.makedirs(db_dir, exist_ok=True)
 
-checkpointer = SqliteSaver(
-    conn,
-    serde=JsonPlusSerializer(
-        allowed_msgpack_modules=[
-            ("classes", "Status"),
-            ("classes", "TicketType"),
-            ("classes", "TicketPriority"),
-            ("classes", "Repo"),
-            ("classes", "Ticket"),
-        ]
-    ),
-)
+conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+
+checkpointer = SqliteSaver(conn, serde=make_serializer())
 
 
 # === Building Graph ===

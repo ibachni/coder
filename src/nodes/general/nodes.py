@@ -10,6 +10,8 @@ from helper.repoPaths import resolve_repo
 from prompt_loader import render
 from tools.get_ticket import get_open_ticket, get_ticket
 from classes import TicketType
+from bootstrap import BootstrapError, detect_commands
+from ledger import ticket_dir, write_json
 
 ### Initial steps
 
@@ -81,6 +83,28 @@ def open_branch(state: AgentState) -> AgentState:
         print(f"stderr: {e.stderr}")
         raise
 
+    state.step += 1
+    return state
+
+
+def repo_bootstrap_check(state: AgentState) -> AgentState:
+    """Discover the repo's test/lint/typecheck commands and persist them.
+
+    Hard gate: if we cannot determine how to build/test the repo, fail fast and
+    surface to the human rather than letting the inner loop flail on unknown
+    commands. Writes the detected commands to the ticket-tier `bootstrap.json`.
+    """
+    assert state.repo_path is not None, "repo_bootstrap_check requires repo_path"
+    assert state.ticket_id is not None, "repo_bootstrap_check requires ticket_id"
+
+    try:
+        config = detect_commands(state.repo_path)
+    except BootstrapError:
+        state.status = Status.FAILURE
+        return state
+
+    bootstrap_path = ticket_dir(state.repo_path, state.ticket_id) / "bootstrap.json"
+    write_json(bootstrap_path, config.model_dump())
     state.step += 1
     return state
 
