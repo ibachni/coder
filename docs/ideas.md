@@ -15,3 +15,7 @@
 - Update my Trading App & complete
     - build observability & SOTA logging to be able to identify issues immediately
 - Build automated trading strategy researher
+
+
+# Insights
+- The world will converge to -> standard interface; individual features; build on top of existing products

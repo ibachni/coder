@@ -1,7 +1,31 @@
 # Implementation Plan: Agentic Coding Workflow
 
 Status: proposed
-Last updated: 2026-06-04
+Last updated: 2026-06-06
+
+## Why I'm building this
+
+This repo automates two kinds of autonomous agent work, both run inside **strong,
+deterministic harnesses** so they can finish real tasks unattended — not just
+produce a first draft and stall.
+
+1. **Agentic coding.** Drive a coding task end to end, including complex ones,
+   without losing the thread. The pattern is: create an overall plan first, then
+   break it into smaller steps. When a step needs more information, do the
+   research first; implement the step; and update the overall plan if what was
+   learned changes it. Repeat — research-as-needed → implement → reconcile the
+   plan — until the whole plan is done. The harness owns the control flow and the
+   gates so the agent can keep going through long, multi-step work.
+
+2. **Research agents.** Run agents that investigate a given question or topic, in
+   the same kind of controlled, well-harnessed environment. The goal is
+   repeatable, bounded research runs rather than open-ended chat.
+
+The common thread is the guiding principle below: **the harness is hardcoded and
+deterministic; the cognition is delegated.** Strong harnesses are what let these
+agents take on harder, longer tasks and actually finish them. The rest of this
+document specifies the coding workflow; the research-agent track will follow the
+same harness philosophy.
 
 ## Goal
 
