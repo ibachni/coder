@@ -1,11 +1,11 @@
 import json
-import re
+import os
 import subprocess
+from pathlib import Path
 from langgraph.types import interrupt
 
-from nodes.helpers import oauth_token, slugify
+from nodes.helpers import parse_json_block, run_agent, slugify
 from classes import AgentState, Status
-from helper.cleanSubscriptionEnv import clean_subscription_env
 from helper.repoPaths import resolve_repo
 from prompt_loader import render
 from tools.get_ticket import get_open_ticket, get_ticket
@@ -109,6 +109,14 @@ def repo_bootstrap_check(state: AgentState) -> AgentState:
     return state
 
 
+def route_after_bootstrap(state: AgentState) -> str:
+    """Conditional after the bootstrap gate (§3.1/§3.2): fail fast to END, else split by
+    ticket type. Reuses `assert_coding`; pure (no mutation)."""
+    if state.status is Status.FAILURE:
+        return "end"
+    return "big_plan" if assert_coding(state) else "research"
+
+
 def surface_questions(state: AgentState) -> AgentState:
     """
     Usually the text body given is not specific enough.
@@ -125,28 +133,12 @@ def surface_questions(state: AgentState) -> AgentState:
         ticket_body=state.ticket.content.body,
         repo_path=state.repo_path,
     )
-    result = subprocess.run(
-        ["claude", "-p", prompt],
-        env=clean_subscription_env(oauth_token),
-        cwd=state.repo_path,
-        timeout=600,
-        capture_output=True,
-        text=True,
-    )
+    result = run_agent(prompt, state.repo_path)
     if result.returncode != 0:
         state.status = Status.FAILURE
         return state
-    raw = result.stdout.strip()
-
-    if raw.startswith("```"):
-        raw = re.sub(r"^```(?:json)?\s*", "", raw)
-        raw = re.sub(r"\s*```$", "", raw)
-    start = raw.find("[")
-    end = raw.rfind("]")
-    if start != -1 and end != -1:
-        raw = raw[start : end + 1]
     try:
-        state.questions = json.loads(raw)
+        state.questions = parse_json_block(result.stdout)
     except json.JSONDecodeError:
         state.status = Status.FAILURE
         return state
@@ -172,11 +164,104 @@ def review(state: AgentState) -> AgentState:
     return state
 
 
-def commit_push(state: AgentState) -> AgentState:
+def final_review(state: AgentState) -> AgentState:
+    """**Phase-1 STUB** (§3.8): pass-through to commit_push. Phase 3 replaces this with
+    the real whole-branch review + bounded replan."""
     state.step += 1
     return state
 
 
+def _has_origin(cwd: Path) -> bool:
+    """Whether an `origin` remote is configured — push and PR creation both need one (§8)."""
+    remotes = subprocess.run(
+        ["git", "remote"], cwd=cwd, capture_output=True, text=True, check=True
+    ).stdout.split()
+    return "origin" in remotes
+
+
+def commit_push(state: AgentState) -> AgentState:
+    """Commit the ticket branch and push it to origin if a remote exists (§3.9).
+
+    Stages everything, commits `ticket <id>: <title>` (skipping cleanly when the tree
+    is already clean), then pushes the current branch to `origin` — but only if a
+    remote is configured. A repo with no remote commits locally and skips the push
+    rather than failing (§8). Git failures propagate, matching `open_branch`.
+    """
+    assert state.ticket is not None, "commit_push requires a ticket"
+    assert state.repo_path is not None, "commit_push requires repo_path"
+    assert state.ticket_id is not None, "commit_push requires ticket_id"
+    cwd = state.repo_path
+    message = f"ticket {state.ticket_id}: {state.ticket.content.title}"
+
+    def git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=check)
+
+    try:
+        git("add", "-A")
+        # `git diff --cached --quiet` exits non-zero iff something is staged.
+        if git("diff", "--cached", "--quiet", check=False).returncode != 0:
+            git("commit", "-m", message)
+
+        if _has_origin(cwd):
+            branch = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+            git("push", "-u", "origin", branch)
+    except subprocess.CalledProcessError as e:
+        print(f"git command failed: {' '.join(e.cmd)}")
+        print(f"stderr: {e.stderr}")
+        raise
+
+    state.step += 1
+    return state
+
+
+def _pr_body(state: AgentState) -> str:
+    return (
+        f"Automated changes for ticket {state.ticket_id}.\n\n"
+        f"Plan and per-change ledger: `.coder/runs/{state.ticket_id}/`."
+    )
+
+
 def merge(state: AgentState) -> AgentState:
+    """Land the ticket branch (§3.10).
+
+    Default (`CODER_MERGE_MODE` unset/`pr`): open a PR with `gh pr create` — generated
+    code shouldn't merge to `main` unattended until the Phase-3 verifier + review exist
+    (decision §7.1). Set `CODER_MERGE_MODE=squash` for the eventual autonomous path:
+    squash-merge the per-change commits into one clean `main` commit.
+    """
+    assert state.ticket is not None, "merge requires a ticket"
+    assert state.repo_path is not None, "merge requires repo_path"
+    assert state.ticket_id is not None, "merge requires ticket_id"
+    cwd = state.repo_path
+    title = f"ticket {state.ticket_id}: {state.ticket.content.title}"
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True)
+
+    try:
+        if os.environ.get("CODER_MERGE_MODE", "pr") == "squash":
+            branch = git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+            git("checkout", "main")
+            git("merge", "--squash", branch)
+            git("commit", "-m", title)
+        elif _has_origin(cwd):
+            subprocess.run(
+                ["gh", "pr", "create", "--title", title, "--body", _pr_body(state)],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+        else:
+            # Can't open a PR without a remote; the branch is committed locally (§8).
+            print(
+                f"merge: no 'origin' remote — ticket {state.ticket_id} branch committed "
+                "locally, skipping PR (open one manually or set CODER_MERGE_MODE=squash)."
+            )
+    except subprocess.CalledProcessError as e:
+        print(f"merge command failed: {' '.join(e.cmd)}")
+        print(f"stderr: {e.stderr}")
+        raise
+
     state.step += 1
     return state

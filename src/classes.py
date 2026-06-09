@@ -63,6 +63,7 @@ class WorkUnit(BaseModel):
 
     id: str
     title: str
+    intent: str = ""  # one-line rationale from big_plan; surfaced at the approval gate (§3.4)
     dod: dict = {}  # coding: test classes | research: coverage criteria
     status: ChangeStatus = ChangeStatus.PENDING
     ledger_path: Optional[Path] = None
@@ -89,4 +90,6 @@ class AgentState(BaseModel):
     autonomy: int = 1  # the autonomy knob (0=ask more … 3=decide)
     questions: Optional[list[dict]] = None  # structured UI payload (q + options)
     answers: Optional[str] = None
+    # HITL resume payload {approved, answers, feedback}; phase-1 §3.4
+    approval: Optional[dict] = None
     complexity: Optional[TicketComplexity] = None

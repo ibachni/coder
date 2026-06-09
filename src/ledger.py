@@ -10,9 +10,13 @@ import json
 from pathlib import Path
 from typing import Any
 
+from classes import WorkUnit
+
 LEDGER_ROOT = ".coder/runs"
 DEFAULT_MAX_LINES = 100
 DEFAULT_MAX_CHARS = 8000
+PLAN_FILENAME = "plan.md"
+CHANGES_FILENAME = "changes.json"
 
 
 # --- path helpers (create the dir on access) -------------------------------------
@@ -64,6 +68,47 @@ def append_jsonl(path: Path, record: dict) -> Path:
     with path.open("a") as f:
         f.write(json.dumps(record, default=str) + "\n")
     return path
+
+
+# --- plan + changes (the ticket-tier outer-loop artifacts) -----------------------
+#
+# `big_plan` writes `plan.md` (human-facing, gated) and `changes.json` (the ordered
+# work units the outer loop iterates). The `implement_change` loop rewrites
+# `changes.json` as units move PENDING → DONE so a resume sees real progress. Both
+# producers go through here so the path + schema live in one place.
+
+
+def changes_path(repo: Path, ticket_id: str) -> Path:
+    return ticket_dir(repo, ticket_id) / CHANGES_FILENAME
+
+
+def plan_path(repo: Path, ticket_id: str) -> Path:
+    return ticket_dir(repo, ticket_id) / PLAN_FILENAME
+
+
+def write_plan(repo: Path, ticket_id: str, plan_md: str) -> Path:
+    """Persist the high-level `plan.md` under the ticket tier."""
+    return write_text(plan_path(repo, ticket_id), plan_md)
+
+
+def write_changes(repo: Path, ticket_id: str, units: list[WorkUnit]) -> Path:
+    """Serialize the ordered work units to `changes.json`.
+
+    Shape: ``{"version": N, "changes": [<WorkUnit>, ...]}``. `version` is a monotonic
+    write counter (1 on first write, bumped on every rewrite) so an observer can tell
+    a re-plan / progress update from the original plan. Units are dumped in JSON mode
+    so enums (`status`) and `Path`s round-trip cleanly back through `load_changes`.
+    """
+    path = changes_path(repo, ticket_id)
+    prior = read_json(path).get("version", 0) if path.exists() else 0
+    data = {"version": prior + 1, "changes": [u.model_dump(mode="json") for u in units]}
+    return write_json(path, data)
+
+
+def load_changes(repo: Path, ticket_id: str) -> list[WorkUnit]:
+    """Read `changes.json` back into `WorkUnit`s (inverse of `write_changes`)."""
+    data = read_json(changes_path(repo, ticket_id))
+    return [WorkUnit.model_validate(c) for c in data["changes"]]
 
 
 # --- Tier-2 pull valve -----------------------------------------------------------

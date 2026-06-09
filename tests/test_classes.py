@@ -22,6 +22,7 @@ class TestWorkUnit:
     def test_minimal_defaults(self) -> None:
         wu = WorkUnit(id="c01", title="add a field")
         assert wu.status is ChangeStatus.PENDING
+        assert wu.intent == ""
         assert wu.dod == {}
         assert wu.soft_loc is None
         assert wu.needs_research is False
@@ -118,6 +119,25 @@ class TestAgentStateFields:
         )
         assert state.questions is not None
         assert state.questions[0]["options"][0]["recommended"] is True
+
+    def test_approval_defaults_to_none(self) -> None:
+        state = AgentState(status=Status.CONT, step=0, artifact={})
+        assert state.approval is None
+
+    def test_approval_accepts_resume_payload(self) -> None:
+        state = AgentState(
+            status=Status.CONT,
+            step=0,
+            artifact={},
+            approval={
+                "approved": True,
+                "answers": [{"id": "q1", "answer": "yes"}],
+                "feedback": None,
+            },
+        )
+        assert state.approval is not None
+        assert state.approval["approved"] is True
+        assert state.approval["answers"][0]["answer"] == "yes"
 
     def test_priority_still_coerces(self) -> None:
         # Guard that extending the model didn't disturb existing coercion.

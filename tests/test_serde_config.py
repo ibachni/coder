@@ -42,3 +42,19 @@ class TestRoundTrip:
         )
         restored = _roundtrip(state)
         assert restored == state
+
+    def test_agent_state_with_approval(self) -> None:
+        # approval is a plain dict, so it needs no allow-list entry (phase-1 §6); prove
+        # an AgentState carrying one still round-trips through the checkpointer's serde.
+        state = AgentState(
+            status=Status.CONT,
+            step=1,
+            artifact={},
+            approval={
+                "approved": False,
+                "answers": [{"id": "q1", "answer": "no"}],
+                "feedback": "redo",
+            },
+        )
+        restored = _roundtrip(state)
+        assert restored == state

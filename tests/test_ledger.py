@@ -5,14 +5,20 @@ from pathlib import Path
 
 import pytest
 
+from classes import ChangeStatus, WorkUnit
 from ledger import (
     LEDGER_ROOT,
+    PLAN_FILENAME,
     append_jsonl,
     change_dir,
+    changes_path,
+    load_changes,
     read_json,
     read_ledger_slice,
     ticket_dir,
+    write_changes,
     write_json,
+    write_plan,
     write_text,
 )
 
@@ -63,6 +69,47 @@ class TestWriteRead:
         append_jsonl(p, {"n": 2})
         records = [json.loads(line) for line in p.read_text().splitlines()]
         assert records == [{"n": 1}, {"n": 2}]
+
+
+class TestPlanAndChanges:
+    def test_write_plan_lands_under_ticket_dir(self, tmp_path: Path) -> None:
+        p = write_plan(tmp_path, "42", "## Plan\nbody")
+        assert p == tmp_path / LEDGER_ROOT / "42" / PLAN_FILENAME
+        assert p.read_text() == "## Plan\nbody"
+
+    def test_changes_roundtrip_preserves_fields(self, tmp_path: Path) -> None:
+        units = [
+            WorkUnit(id="c01", title="first", soft_loc=120, needs_research=True),
+            WorkUnit(
+                id="c02",
+                title="second",
+                status=ChangeStatus.DONE,
+                ledger_path=tmp_path / ".coder" / "runs" / "42" / "c02",
+            ),
+        ]
+        write_changes(tmp_path, "42", units)
+        loaded = load_changes(tmp_path, "42")
+        assert loaded == units
+
+    def test_status_enum_survives_roundtrip(self, tmp_path: Path) -> None:
+        write_changes(tmp_path, "42", [WorkUnit(id="c01", title="x", status=ChangeStatus.DONE)])
+        loaded = load_changes(tmp_path, "42")
+        assert loaded[0].status is ChangeStatus.DONE  # not the string "done"
+
+    def test_envelope_shape(self, tmp_path: Path) -> None:
+        write_changes(tmp_path, "42", [WorkUnit(id="c01", title="x")])
+        data = read_json(changes_path(tmp_path, "42"))
+        assert set(data) == {"version", "changes"}
+        assert isinstance(data["changes"], list)
+
+    def test_version_starts_at_one_and_bumps_on_rewrite(self, tmp_path: Path) -> None:
+        units = [WorkUnit(id="c01", title="x")]
+        write_changes(tmp_path, "42", units)
+        assert read_json(changes_path(tmp_path, "42"))["version"] == 1
+        # Rewrite (e.g. implement_change marking a unit DONE) bumps the counter.
+        units[0].status = ChangeStatus.DONE
+        write_changes(tmp_path, "42", units)
+        assert read_json(changes_path(tmp_path, "42"))["version"] == 2
 
 
 class TestReadLedgerSlice:
