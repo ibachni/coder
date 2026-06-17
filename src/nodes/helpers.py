@@ -7,8 +7,6 @@ from typing import Any
 from helper.authTokenLoader import load_oauth_token
 from helper.cleanSubscriptionEnv import clean_subscription_env
 
-oauth_token = load_oauth_token()
-
 
 def slugify(text: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
@@ -25,7 +23,7 @@ def run_agent(prompt: str, repo: Path, *, timeout: int = 600) -> subprocess.Comp
     """
     return subprocess.run(
         ["claude", "-p", prompt],
-        env=clean_subscription_env(oauth_token),
+        env=clean_subscription_env(load_oauth_token()),
         cwd=repo,
         timeout=timeout,
         capture_output=True,

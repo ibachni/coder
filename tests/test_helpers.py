@@ -26,6 +26,7 @@ class TestSlugify:
 class TestRunAgent:
     def test_wires_claude_invocation(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "should-be-stripped")
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok-abc")  # read at call time
         captured: dict = {}
 
         def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
@@ -45,7 +46,20 @@ class TestRunAgent:
         assert captured["kwargs"]["capture_output"] is True
         env = captured["kwargs"]["env"]
         assert "ANTHROPIC_API_KEY" not in env  # subscription env strips it
-        assert "CLAUDE_CODE_OAUTH_TOKEN" in env
+        assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "tok-abc"  # token from the environment
+
+    def test_omits_token_when_unset(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        # No token configured → leave the var unset so `claude` uses the ambient login.
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        captured: dict = {}
+
+        def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            captured["kwargs"] = kwargs
+            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(helpers.subprocess, "run", fake_run)
+        run_agent("p", tmp_path)
+        assert "CLAUDE_CODE_OAUTH_TOKEN" not in captured["kwargs"]["env"]
 
     def test_does_not_raise_on_nonzero_exit(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

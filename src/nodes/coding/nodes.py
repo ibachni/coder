@@ -5,8 +5,9 @@ from pathlib import Path
 
 from langgraph.types import interrupt
 
-from nodes.helpers import oauth_token, parse_json_block, run_agent
+from nodes.helpers import parse_json_block, run_agent
 from classes import AgentState, ChangeStatus, Status, WorkUnit
+from helper.authTokenLoader import load_oauth_token
 from helper.cleanSubscriptionEnv import clean_subscription_env
 from ledger import _safe_segment, change_dir, plan_path, write_changes, write_plan
 from prompt_loader import render
@@ -316,7 +317,7 @@ def write_tests(state: AgentState) -> AgentState:
     prompt = render("write_tests", ticket_id=state.ticket_id)
     result = subprocess.run(
         ["claude", "-p", prompt],
-        env=clean_subscription_env(oauth_token),
+        env=clean_subscription_env(load_oauth_token()),
         cwd=state.repo_path,
         timeout=600,
         capture_output=True,

@@ -566,6 +566,16 @@ a gate:
 
 ## 4. Workflow B — Research
 
+> **Expanded.** Since this section was written, research grew two more modes
+> (**continuous** + **discover**) and a shared **watchlist** artifact, and was
+> resequenced to ship **first**. It was also **split into v1/v2**: **v1 uses a single
+> reasoning agent with tools** to do the research; the parallel `investigate` fan-out
+> + adversarial `verify_claims` + `coverage_critic` loop below is the **v2** target.
+> The authoritative, up-to-date research plan is
+> [docs/research/implementation-plan.md](research/implementation-plan.md); the
+> step-level behavior is [docs/runbooks/research.md](runbooks/research.md). The
+> graph below describes the **`new`-question mode** only.
+
 Research follows the *same spine* but inverts the concurrency model (reads
 parallelize) and replaces executable ground truth with **evidential** ground truth.
 Its output target is the knowledge repo (`Repo.RESEARCH`) — research findings are

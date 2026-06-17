@@ -1,4 +1,6 @@
 .env
+# MCP config written by the firecrawl notebook — embeds the API key
+mcp_firecrawl.json
 
 # Python
 __pycache__/
