@@ -71,6 +71,77 @@ class TestRunAgent:
         # Callers inspect returncode themselves; the helper must not raise.
         assert run_agent("p", tmp_path).returncode == 1
 
+    def test_defaults_omit_research_flags(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        # Coding path: with no research kwargs the command is exactly `claude -p <prompt>`.
+        captured: dict = {}
+
+        def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            captured["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(helpers.subprocess, "run", fake_run)
+        run_agent("p", tmp_path)
+        assert captured["cmd"] == ["claude", "-p", "p"]
+
+    def test_research_flags_appended(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        captured: dict = {}
+
+        def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            captured["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+
+        monkeypatch.setattr(helpers.subprocess, "run", fake_run)
+        cfg = tmp_path / ".mcp.json"
+        run_agent(
+            "go",
+            tmp_path,
+            mcp_config=cfg,
+            allowed_tools=["mcp__firecrawl", "mcp__firecrawl__firecrawl_scrape"],
+            output_format="json",
+        )
+        cmd = captured["cmd"]
+        assert cmd[:3] == ["claude", "-p", "go"]
+        assert cmd[cmd.index("--mcp-config") + 1] == str(cfg)
+        assert "--strict-mcp-config" in cmd  # only this config's servers load
+        assert cmd[cmd.index("--allowedTools") + 1 : cmd.index("--allowedTools") + 3] == [
+            "mcp__firecrawl",
+            "mcp__firecrawl__firecrawl_scrape",
+        ]
+        assert cmd[cmd.index("--output-format") + 1] == "json"
+
+    def test_disallowed_tools_appended(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        captured: dict = {}
+
+        def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+            captured["cmd"] = cmd
+            return subprocess.CompletedProcess(cmd, 0, stdout="{}", stderr="")
+
+        monkeypatch.setattr(helpers.subprocess, "run", fake_run)
+        run_agent("go", tmp_path, disallowed_tools=["Write", "Bash"])
+        cmd = captured["cmd"]
+        assert cmd[cmd.index("--disallowedTools") + 1 : cmd.index("--disallowedTools") + 3] == [
+            "Write",
+            "Bash",
+        ]
+
+
+class TestAgentText:
+    def test_returns_result(self) -> None:
+        assert helpers.agent_text(json.dumps({"is_error": False, "result": "hi"})) == "hi"
+
+    def test_raises_on_error(self) -> None:
+        with pytest.raises(RuntimeError):
+            helpers.agent_text(json.dumps({"is_error": True, "result": "boom"}))
+
+    def test_raises_on_non_json(self) -> None:
+        # A crash before the envelope must surface as the same RuntimeError, not a decode error.
+        with pytest.raises(RuntimeError):
+            helpers.agent_text("Error: claude crashed\n")
+
 
 class TestParseJsonBlock:
     def test_bare_object(self) -> None:

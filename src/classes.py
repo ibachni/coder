@@ -40,6 +40,17 @@ class Repo(Enum):
     RESEARCH = "research"
 
 
+class ResearchMode(Enum):
+    """Which research branch a ticket takes (docs/research/implementation-plan.md §1).
+
+    Set by `classify_research_type` right after intake; the research subgraph routes on it.
+    """
+
+    NEW = "new"  # one-off: frame a brief, then a single agent writes a cited report
+    CONTINUOUS = "continuous"  # recurring: scrape the watchlist + search for what's new
+    DISCOVER = "discover"  # build the watchlist a continuous question scrapes
+
+
 class TicketContent(BaseModel):
     id: int
     type: TicketType
@@ -74,6 +85,25 @@ class WorkUnit(BaseModel):
     inner_plan_path: Optional[Path] = None  # pointer to the low-level plan, if any
 
 
+class WatchEntry(BaseModel):
+    """One site the continuous research mode re-scrapes every run (docs/runbooks/research.md).
+
+    Distinct from `WorkUnit`: a `WorkUnit` is a one-shot sub-question; a `WatchEntry` is a
+    recurring *input* persisted as a row in `watchlist.jsonl`. `last_content_hash` lets a
+    run skip a site whose content is unchanged; `status` flags a dead/blocked URL instead
+    of silently dropping it (the "no silent caps" invariant).
+    """
+
+    url: str
+    kind: str = ""  # blog | news | docs | rss | ...
+    why: str = ""  # why this site is worth monitoring
+    scope: str = "single-page"  # single-page | crawl-subpath | rss
+    added_at: Optional[str] = None
+    last_scraped_at: Optional[str] = None
+    last_content_hash: Optional[str] = None
+    status: str = "active"  # active | stale
+
+
 class AgentState(BaseModel):
     status: Status
     step: int  # telemetry only
@@ -93,3 +123,7 @@ class AgentState(BaseModel):
     # HITL resume payload {approved, answers, feedback}; phase-1 §3.4
     approval: Optional[dict] = None
     complexity: Optional[TicketComplexity] = None
+    # research workflow (docs/research/implementation-plan.md §0); set by classify_research_type
+    research_mode: Optional[ResearchMode] = None
+    report_path: Optional[Path] = None  # research/<slug>/report.md
+    watchlist_path: Optional[Path] = None  # research/<slug>/watchlist.jsonl

@@ -5,7 +5,7 @@ to deserialize on resume, so we round-trip the new types through the configured
 serializer directly.
 """
 
-from classes import AgentState, ChangeStatus, Status, WorkUnit
+from classes import AgentState, ChangeStatus, ResearchMode, Status, WatchEntry, WorkUnit
 from serde_config import ALLOWED_MSGPACK_MODULES, make_serializer
 
 
@@ -18,6 +18,10 @@ class TestAllowList:
     def test_new_types_are_registered(self) -> None:
         assert ("classes", "WorkUnit") in ALLOWED_MSGPACK_MODULES
         assert ("classes", "ChangeStatus") in ALLOWED_MSGPACK_MODULES
+
+    def test_research_types_are_registered(self) -> None:
+        assert ("classes", "ResearchMode") in ALLOWED_MSGPACK_MODULES
+        assert ("classes", "WatchEntry") in ALLOWED_MSGPACK_MODULES
 
 
 class TestRoundTrip:
@@ -55,6 +59,26 @@ class TestRoundTrip:
                 "answers": [{"id": "q1", "answer": "no"}],
                 "feedback": "redo",
             },
+        )
+        restored = _roundtrip(state)
+        assert restored == state
+
+    def test_research_mode(self) -> None:
+        assert _roundtrip(ResearchMode.CONTINUOUS) == ResearchMode.CONTINUOUS
+
+    def test_watch_entry(self) -> None:
+        entry = WatchEntry(url="https://blog.example/feed", kind="blog", scope="rss")
+        assert _roundtrip(entry) == entry
+
+    def test_agent_state_research_fields(self) -> None:
+        from pathlib import Path
+
+        state = AgentState(
+            status=Status.CONT,
+            step=0,
+            artifact={},
+            research_mode=ResearchMode.NEW,
+            report_path=Path("research/topic/report.md"),
         )
         restored = _roundtrip(state)
         assert restored == state

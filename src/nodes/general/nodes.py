@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from langgraph.types import interrupt
@@ -152,6 +153,111 @@ def get_user_answer(state: AgentState) -> AgentState:
         return state
     answers = interrupt({"questions": state.questions})
     state.answers = answers
+    state.step += 1
+    return state
+
+
+### HITL gate (shared)
+#
+# The approval gate is one pattern reused by both tracks: coding's `approve_plan`
+# (over plan.md) and research's `approve_brief`/`approve_watchlist` (over brief.md).
+# The reusable pieces live here so a question's durable record format is defined once.
+# The `interrupt()` itself stays in each caller's module so a test can monkeypatch it
+# there; the caller passes the resume value to `apply_gate_decision`.
+
+
+def render_questions_section(questions: list[dict]) -> str:
+    """Render the durable `## Open questions & decisions` section appended to a gated doc.
+
+    Each question gets a stable `### Q{n}:` heading so the gate can append the chosen
+    answer beneath it (via `record_answers`) as the durable record.
+    """
+    parts = ["\n\n## Open questions & decisions\n"]
+    if not questions:
+        parts.append("\n_None — the ticket is workable as written._\n")
+        return "".join(parts)
+    for i, q in enumerate(questions, 1):
+        parts.append(f"\n### Q{i}: {str(q.get('question', '')).strip()}\n")
+        if q.get("category"):
+            parts.append(f"- _Category:_ {q['category']}\n")
+        if q.get("why"):
+            parts.append(f"- _Why it matters:_ {q['why']}\n")
+        for opt in q.get("options") or []:
+            rec = " _(recommended)_" if opt.get("recommended") else ""
+            parts.append(
+                f"- **{opt.get('label', '')}**{rec} — pro: {opt.get('pro', '')}; "
+                f"con: {opt.get('con', '')}\n"
+            )
+    return "".join(parts)
+
+
+def _answer_index(qid: object) -> int | None:
+    """Map a resume answer id (e.g. "q1") to its 1-based question number."""
+    if not isinstance(qid, str):
+        return None
+    m = re.search(r"\d+", qid)
+    return int(m.group()) if m else None
+
+
+def record_answers(doc_path: Path, answers: object) -> None:
+    """Append each answer beneath its `### Q{n}:` heading in the gated doc (durable record).
+
+    Idempotent: a question that already carries an `- _Answer:_` line is left untouched,
+    so a re-entry of the gate (e.g. a crash between this write and the checkpoint) can't
+    duplicate answers. Answer text is collapsed to a single line so a multi-line reply
+    can't break the markdown record or smuggle in a fake `### Q` heading.
+    """
+    if not doc_path.exists() or not isinstance(answers, list):
+        return
+    by_index: dict[int, str] = {}
+    for a in answers:
+        if not isinstance(a, dict):
+            continue
+        n = _answer_index(a.get("id"))
+        raw = a.get("answer")
+        ans = " ".join(str(raw).split()) if raw is not None else ""
+        if n is not None and ans:
+            by_index[n] = ans
+    if not by_index:
+        return
+    lines = doc_path.read_text().split("\n")
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        out.append(line)
+        m = re.match(r"^### Q(\d+):", line)
+        if not m:
+            continue
+        n = int(m.group(1))
+        already_answered = i + 1 < len(lines) and lines[i + 1].startswith("- _Answer:_")
+        if n in by_index and not already_answered:
+            out.append(f"- _Answer:_ {by_index[n]}")
+    doc_path.write_text("\n".join(out))
+
+
+def apply_gate_decision(
+    state: AgentState, resume: object, *, doc_path: Path, max_replans: int
+) -> AgentState:
+    """Apply a HITL gate resume to the state — the generic half of an approval node.
+
+    The caller has already run `interrupt(payload)` (in its own module, so it's
+    monkeypatchable) and passes the `resume` here. On approval: clear
+    `has_open_questions` and record any answers into `doc_path`. On rejection: a bounded
+    re-plan (increment `replans`) until `max_replans`, then `Status.FAILURE` rather than
+    thrash. A non-dict resume (malformed UI payload) is treated as a rejection.
+    """
+    state.approval = resume if isinstance(resume, dict) else {"approved": False}
+
+    answers = state.approval.get("answers")
+    if answers:
+        record_answers(doc_path, answers)
+
+    if state.approval.get("approved") is True:
+        state.has_open_questions = False
+    elif state.replans < max_replans:
+        state.replans += 1
+    else:
+        state.status = Status.FAILURE
+
     state.step += 1
     return state
 

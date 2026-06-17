@@ -136,24 +136,31 @@ coverage_critic "what's missing?" ─(gaps)→ replan_research → investigate* 
 
 Each phase is independently shippable and leaves the graph runnable.
 
-### Phase R0 — Spine: tools, artifact, output folder (the unblocker)
-- **Auth** — `load_oauth_token` reads `CLAUDE_CODE_OAUTH_TOKEN` (ambient-login fallback). *(done)*
-- **Firecrawl MCP** declared in the RESEARCH repo's committed `.mcp.json` (stdio
-  `npx firecrawl-mcp@<pinned>`, `${FIRECRAWL_API_KEY}` interpolation). Extend `run_agent`
-  with optional `mcp_config` / `allowed_tools` / `output_format` kwargs (coding path
-  unchanged). Reachability proven by [notebooks/firecrawl_mcp_reachability.ipynb](../../notebooks/firecrawl_mcp_reachability.ipynb).
-- **`WatchEntry`** pydantic model + serde allow-list registration; `AgentState` fields
-  `research_mode` / `report_path` / `watchlist_path`.
-- **Research output-folder I/O** (`report.md` / `brief.md` / `sources.jsonl` /
-  `watchlist.jsonl` / `last_run.json`), kept separate from the `.coder/runs` ledger.
-- **Generalize the HITL gate** — lift `approve_plan` to `general` so `approve_brief`
-  and `approve_watchlist` reuse it.
-- **Permissions** — pass an explicit `--allowedTools` allowlist (never
-  `bypassPermissions`); the set is per-mode (R1/R2: `firecrawl_search` +
-  `firecrawl_scrape`; R3 adds `firecrawl_map`; `firecrawl_crawl` stays out until budgeted).
-- **Done-when:** the research agent can search+scrape via Firecrawl through `claude -p`
-  (notebook green); `WatchEntry` round-trips through the checkpointer; the output folder
-  writes/reads; graph still compiles.
+### Phase R0 — Spine: tools, artifact, output folder (the unblocker) ✅ DONE
+- **Auth** — `load_oauth_token` reads `CLAUDE_CODE_OAUTH_TOKEN`, ambient-login fallback
+  ([src/helper/authTokenLoader.py](../../src/helper/authTokenLoader.py),
+  [cleanSubscriptionEnv.py](../../src/helper/cleanSubscriptionEnv.py)).
+- **`run_agent` kwargs** — optional `mcp_config` / `allowed_tools` / `output_format`
+  (coding path byte-for-byte unchanged) + `agent_text` envelope helper
+  ([src/nodes/helpers.py](../../src/nodes/helpers.py)). Tool wiring/allowlists per mode in
+  [src/research_config.py](../../src/research_config.py); crawl never exposed.
+- **Firecrawl MCP** — reachability proven by
+  [notebooks/firecrawl_mcp_reachability.ipynb](../../notebooks/firecrawl_mcp_reachability.ipynb);
+  the committed `.mcp.json` to drop into the RESEARCH repo (pin the version) is documented
+  in [docs/research/firecrawl-mcp-setup.md](firecrawl-mcp-setup.md). *(manual: place the
+  file in the RESEARCH repo, which isn't in this tree.)*
+- **`WatchEntry` + `ResearchMode`** models + serde allow-list registration; `AgentState`
+  fields `research_mode` / `report_path` / `watchlist_path` ([src/classes.py](../../src/classes.py),
+  [serde_config.py](../../src/serde_config.py)).
+- **Research output-folder I/O** ([src/research_io.py](../../src/research_io.py)) —
+  `report.md` / `brief.md` / `sources.jsonl` / `watchlist.jsonl` / `last_run.json`, separate
+  from the `.coder/runs` ledger; missing files read as empty.
+- **Generalized HITL gate** — `render_questions_section` / `record_answers` /
+  `apply_gate_decision` lifted into [general/nodes.py](../../src/nodes/general/nodes.py);
+  `approve_plan` delegates (behavior unchanged), ready for `approve_brief`/`approve_watchlist`.
+- **Done-when (verified — 212 tests pass, ruff + pyright clean, graph compiles):** notebook
+  green; new types round-trip through the checkpointer; output folder writes/reads; the
+  coding path is unregressed.
 
 ### Phase R1 — `new` mode end-to-end (the spine proof)
 - **`frame_brief`** → `brief.md` + sub-questions + per-question `done-when`; surface
@@ -219,9 +226,10 @@ machinery explained in [docs/runbooks/research.md](../runbooks/research.md) and 
 6. **Published report ≠ ledger** — `report.md` is the clean artifact; raw search/scrape
    traces stay in `.coder/runs/`.
 7. **The research agent gets read-only tools only** — an explicit Firecrawl allowlist
-   (search/scrape, +map for discover), never `bypassPermissions`, and no
-   Write/Edit/Bash. The node writes every file (decision 7), which is exactly what makes
-   the tight allowlist sufficient — including for unattended/cron runs.
+   (search/scrape, +map for discover), never `bypassPermissions`, and the write/exec
+   built-ins (`Write`/`Edit`/`Bash`/…) denied via `--disallowedTools` so the boundary
+   holds regardless of the RESEARCH repo's own settings. The node writes every file
+   (decision 7). *(R1 should still verify empirically that a write attempt is refused.)*
 
 ---
 
@@ -236,7 +244,8 @@ machinery explained in [docs/runbooks/research.md](../runbooks/research.md) and 
 | Generalized `approve_brief`/`approve_watchlist`, `classify_research_type`, `commit_push`/`merge` reuse | [src/nodes/general/nodes.py](../../src/nodes/general/nodes.py) |
 | Research output-folder I/O (report/brief/sources/watchlist/last_run) | [src/ledger.py](../../src/ledger.py) or `src/research_io.py` (new) |
 | Firecrawl MCP server (stdio `firecrawl-mcp@<pinned>`, `${FIRECRAWL_API_KEY}`) | `.mcp.json` in the RESEARCH repo (new) |
-| `run_agent` `mcp_config`/`allowed_tools`/`output_format` kwargs | [src/nodes/helpers.py](../../src/nodes/helpers.py) |
+| `run_agent` kwargs (`mcp_config`/`allowed_tools`/`disallowed_tools`/`output_format`) + `agent_text` | [src/nodes/helpers.py](../../src/nodes/helpers.py) |
+| Firecrawl tool wiring: per-mode allowlist, denied built-ins, `run_research_agent` | [src/research_config.py](../../src/research_config.py) |
 | Prompts: `frame_brief`, `research_agent`, `discover_sites` | [src/prompts/research/](../../src/prompts/research/) |
 | **v2:** `run_agents`, `web.py`, verify/coverage prompts + rubrics | helpers / `.coder/rubrics/` |
 

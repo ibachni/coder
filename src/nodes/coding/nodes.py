@@ -1,11 +1,15 @@
 import json
-import re
 import subprocess
 from pathlib import Path
 
 from langgraph.types import interrupt
 
 from nodes.helpers import parse_json_block, run_agent
+from nodes.general.nodes import (
+    apply_gate_decision,
+    record_answers,
+    render_questions_section as _render_questions_section,
+)
 from classes import AgentState, ChangeStatus, Status, WorkUnit
 from helper.authTokenLoader import load_oauth_token
 from helper.cleanSubscriptionEnv import clean_subscription_env
@@ -154,31 +158,6 @@ def _valid_soft_loc(loc: object) -> bool:
     return False
 
 
-def _render_questions_section(questions: list[dict]) -> str:
-    """Render the durable `## Open questions & decisions` section appended to plan.md.
-
-    Each question gets a stable `### Q{n}:` heading so approve_plan (Phase 1.2) can
-    append the chosen answer beneath it as the durable record (§3.4).
-    """
-    parts = ["\n\n## Open questions & decisions\n"]
-    if not questions:
-        parts.append("\n_None — the ticket is workable as written._\n")
-        return "".join(parts)
-    for i, q in enumerate(questions, 1):
-        parts.append(f"\n### Q{i}: {str(q.get('question', '')).strip()}\n")
-        if q.get("category"):
-            parts.append(f"- _Category:_ {q['category']}\n")
-        if q.get("why"):
-            parts.append(f"- _Why it matters:_ {q['why']}\n")
-        for opt in q.get("options") or []:
-            rec = " _(recommended)_" if opt.get("recommended") else ""
-            parts.append(
-                f"- **{opt.get('label', '')}**{rec} — pro: {opt.get('pro', '')}; "
-                f"con: {opt.get('con', '')}\n"
-            )
-    return "".join(parts)
-
-
 def approve_plan(state: AgentState) -> AgentState:
     """The single HITL gate (§3.4).
 
@@ -202,21 +181,7 @@ def approve_plan(state: AgentState) -> AgentState:
         "questions": state.questions or [],
     }
     resume = interrupt(payload)
-    state.approval = resume if isinstance(resume, dict) else {"approved": False}
-
-    answers = state.approval.get("answers")
-    if answers:
-        _record_answers(repo, ticket_id, answers)
-
-    if state.approval.get("approved") is True:
-        state.has_open_questions = False
-    elif state.replans < MAX_REPLANS:
-        state.replans += 1  # bounded re-plan; route_after_approval sends us to big_plan
-    else:
-        state.status = Status.FAILURE  # exhausted the re-plan budget (§3.5)
-
-    state.step += 1
-    return state
+    return apply_gate_decision(state, resume, doc_path=plan, max_replans=MAX_REPLANS)
 
 
 def route_after_approval(state: AgentState) -> str:
@@ -229,47 +194,8 @@ def route_after_approval(state: AgentState) -> str:
 
 
 def _record_answers(repo: Path, ticket_id: str, answers: object) -> None:
-    """Append each answer beneath its `### Q{n}:` heading in plan.md (durable record, §3.4).
-
-    Idempotent: a question that already carries an `- _Answer:_` line is left untouched,
-    so a re-entry of approve_plan (e.g. a crash between this write and the checkpoint, §8)
-    can't duplicate answers. Answer text is collapsed to a single line so a multi-line
-    reply can't break the markdown record or smuggle in a fake `### Q` heading.
-    """
-    path = plan_path(repo, ticket_id)
-    if not path.exists() or not isinstance(answers, list):
-        return
-    by_index: dict[int, str] = {}
-    for a in answers:
-        if not isinstance(a, dict):
-            continue
-        n = _answer_index(a.get("id"))
-        raw = a.get("answer")
-        ans = " ".join(str(raw).split()) if raw is not None else ""
-        if n is not None and ans:
-            by_index[n] = ans
-    if not by_index:
-        return
-    lines = path.read_text().split("\n")
-    out: list[str] = []
-    for i, line in enumerate(lines):
-        out.append(line)
-        m = re.match(r"^### Q(\d+):", line)
-        if not m:
-            continue
-        n = int(m.group(1))
-        already_answered = i + 1 < len(lines) and lines[i + 1].startswith("- _Answer:_")
-        if n in by_index and not already_answered:
-            out.append(f"- _Answer:_ {by_index[n]}")
-    path.write_text("\n".join(out))
-
-
-def _answer_index(qid: object) -> int | None:
-    """Map a resume answer id (e.g. "q1") to its 1-based question number."""
-    if not isinstance(qid, str):
-        return None
-    m = re.search(r"\d+", qid)
-    return int(m.group()) if m else None
+    """Record answers into this ticket's plan.md (thin shim over the shared `record_answers`)."""
+    record_answers(plan_path(repo, ticket_id), answers)
 
 
 def select_next_change(state: AgentState) -> AgentState:

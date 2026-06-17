@@ -19,6 +19,8 @@ ALLOWED_MSGPACK_MODULES = [
     ("classes", "TicketContent"),
     ("classes", "ChangeStatus"),
     ("classes", "WorkUnit"),
+    ("classes", "ResearchMode"),
+    ("classes", "WatchEntry"),
     ("classes", "AgentState"),
 ]
 
