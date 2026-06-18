@@ -49,16 +49,27 @@ def test_graph_has_the_rewired_nodes() -> None:
         "select_next_change",
         "implement_change",
         "final_review",
-        "research",
-        "review",
+        # research `new` mode (R1)
+        "classify_research_type",
+        "frame_brief",
+        "approve_brief",
+        "research_agent",
+        "save_report",
         "commit_push",
         "merge",
     }
     assert expected <= nodes
-    # The coding stubs were unwired (§2); they must no longer be graph nodes.
-    assert {"spec", "write_tests", "write_code", "surface_questions", "get_user_answer"}.isdisjoint(
-        nodes
-    )
+    # The coding stubs were unwired (§2), and the research/review stubs were replaced by
+    # the R1 nodes above; none should remain graph nodes.
+    assert {
+        "spec",
+        "write_tests",
+        "write_code",
+        "surface_questions",
+        "get_user_answer",
+        "research",
+        "review",
+    }.isdisjoint(nodes)
 
 
 @pytest.fixture
@@ -130,3 +141,52 @@ def test_coding_ticket_runs_end_to_end(monkeypatch: pytest.MonkeyPatch, cloned_r
         ["git", "log", "--oneline", "main"], cwd=cloned_repo, capture_output=True, text=True
     ).stdout
     assert "ticket 7: add retry budget" in log
+
+
+def test_research_ticket_runs_end_to_end(monkeypatch: pytest.MonkeyPatch, cloned_repo: Path) -> None:
+    """A research ticket flows open_branch → (skip bootstrap) → classify → brief → gate →
+    agent → save → merge, landing report.md on main. Agents + the gate are mocked."""
+    import nodes.research.nodes as rn
+
+    ticket = Ticket(
+        content=TicketContent(
+            id=8,
+            type=TicketType.RESEARCH,
+            priority=TicketPriority.HIGH,
+            repo=Repo.RESEARCH,
+            title="state of AI agents",
+            body="where are agents heading in 2026?",
+        ),
+        path=Path("/tmp/ticket"),
+    )
+    brief = {"brief_md": "## Brief\n\n- Trends — done-when: 3 sources", "questions": []}
+    report = {"report_md": "# Agents\n\nImproving fast [a](https://a.example).", "sources": [{"url": "https://a.example"}]}
+
+    monkeypatch.setattr(gn, "get_ticket", lambda _id: ticket)
+    monkeypatch.setattr(gn, "resolve_repo", lambda _repo: cloned_repo)
+    monkeypatch.setattr(
+        rn, "run_agent", lambda *a, **k: subprocess.CompletedProcess([], 0, stdout=json.dumps(brief), stderr="")
+    )
+    monkeypatch.setattr(
+        rn,
+        "run_research_agent",
+        lambda *a, **k: subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps({"is_error": False, "result": json.dumps(report)}), stderr=""
+        ),
+    )
+    monkeypatch.setattr(rn, "interrupt", lambda payload: {"approved": True})
+    monkeypatch.setenv("CODER_MERGE_MODE", "squash")
+
+    from nodes import graph
+
+    config = {"configurable": {"thread_id": uuid.uuid4().hex}}
+    graph.invoke(AgentState(status=Status.CONT, step=0, artifact={}, ticket_id="8"), config)
+
+    report_md = (cloned_repo / "research" / "8-state-of-ai-agents" / "report.md").read_text()
+    assert "# Agents" in report_md
+    sources = (cloned_repo / "research" / "8-state-of-ai-agents" / "sources.jsonl").read_text()
+    assert "https://a.example" in sources
+    log = subprocess.run(
+        ["git", "log", "--oneline", "main"], cwd=cloned_repo, capture_output=True, text=True
+    ).stdout
+    assert "ticket 8: state of AI agents" in log

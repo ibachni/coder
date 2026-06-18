@@ -60,6 +60,7 @@ def run_agent(
         timeout=timeout,
         capture_output=True,
         text=True,
+        stdin=subprocess.DEVNULL,  # headless: don't block waiting on inherited stdin
     )
 
 
@@ -78,7 +79,9 @@ def agent_text(stdout: str) -> str:
     except json.JSONDecodeError as e:
         raise RuntimeError(f"agent did not return a JSON envelope: {stdout[:200]!r}") from e
     if envelope.get("is_error"):
-        raise RuntimeError(envelope.get("result") or "agent reported is_error")
+        subtype = envelope.get("subtype")
+        detail = envelope.get("result") or subtype or "agent reported is_error"
+        raise RuntimeError(f"{subtype}: {detail}" if subtype else detail)
     return envelope.get("result", "")
 
 

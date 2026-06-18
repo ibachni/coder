@@ -173,3 +173,16 @@ class TestMerge:
         assert any("git merge --squash ticket_42/x" == c for c in joined)
         assert any(c.startswith("git commit -m ticket 42:") for c in joined)
         assert not any(c.startswith("gh ") for c in joined)
+
+
+class TestPrBody:
+    def test_coding_points_at_ledger(self, tmp_path: Path) -> None:
+        body = gn._pr_body(_state(tmp_path))
+        assert ".coder/runs/42/" in body
+
+    def test_research_points_at_research_folder(self, tmp_path: Path) -> None:
+        state = _state(tmp_path)
+        state.ticket.content.type = TicketType.RESEARCH  # type: ignore[union-attr]
+        body = gn._pr_body(state)
+        assert "research/" in body
+        assert ".coder/runs" not in body  # the coding-only ledger link must not appear

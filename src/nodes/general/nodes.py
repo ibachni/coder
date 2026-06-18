@@ -110,12 +110,18 @@ def repo_bootstrap_check(state: AgentState) -> AgentState:
     return state
 
 
+def route_after_open_branch(state: AgentState) -> str:
+    """Split by ticket type right after branching (pure; no mutation).
+
+    Coding goes through the bootstrap gate (test/lint/typecheck detection); research
+    skips it — a knowledge repo has no test commands, so `detect_commands` would
+    hard-fail it — and enters the research graph directly (plan-v2 §4.2)."""
+    return "coding" if assert_coding(state) else "research"
+
+
 def route_after_bootstrap(state: AgentState) -> str:
-    """Conditional after the bootstrap gate (§3.1/§3.2): fail fast to END, else split by
-    ticket type. Reuses `assert_coding`; pure (no mutation)."""
-    if state.status is Status.FAILURE:
-        return "end"
-    return "big_plan" if assert_coding(state) else "research"
+    """Coding-only after the bootstrap gate (§3.1/§3.2): fail fast to END, else plan."""
+    return "end" if state.status is Status.FAILURE else "big_plan"
 
 
 def surface_questions(state: AgentState) -> AgentState:
@@ -265,11 +271,6 @@ def apply_gate_decision(
 ### Last steps
 
 
-def review(state: AgentState) -> AgentState:
-    state.step += 1
-    return state
-
-
 def final_review(state: AgentState) -> AgentState:
     """**Phase-1 STUB** (§3.8): pass-through to commit_push. Phase 3 replaces this with
     the real whole-branch review + bounded replan."""
@@ -321,10 +322,17 @@ def commit_push(state: AgentState) -> AgentState:
 
 
 def _pr_body(state: AgentState) -> str:
-    return (
-        f"Automated changes for ticket {state.ticket_id}.\n\n"
-        f"Plan and per-change ledger: `.coder/runs/{state.ticket_id}/`."
-    )
+    """PR body, pointing reviewers at the right artifacts for the ticket type.
+
+    A research ticket never writes `.coder/runs/` (it skips bootstrap and writes to
+    `research/<slug>/`), so a coding-style ledger link would be dead.
+    """
+    assert state.ticket is not None, "_pr_body requires a ticket"
+    if state.ticket.content.type is TicketType.RESEARCH:
+        artifacts = "Research outputs under `research/` (report.md, sources.jsonl)."
+    else:
+        artifacts = f"Plan and per-change ledger: `.coder/runs/{state.ticket_id}/`."
+    return f"Automated changes for ticket {state.ticket_id}.\n\n{artifacts}"
 
 
 def merge(state: AgentState) -> AgentState:

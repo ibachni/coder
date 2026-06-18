@@ -162,18 +162,28 @@ Each phase is independently shippable and leaves the graph runnable.
   green; new types round-trip through the checkpointer; output folder writes/reads; the
   coding path is unregressed.
 
-### Phase R1 — `new` mode end-to-end (the spine proof)
-- **`frame_brief`** → `brief.md` + sub-questions + per-question `done-when`; surface
-  blocking questions into `brief.md` + `state.questions`.
-- **`approve_brief`** — the single HITL gate (scope/depth/budget; autonomy knob).
-- **`research_agent`** — one reasoning agent works the approved brief end to end with
-  its tools (`firecrawl_search` + `firecrawl_scrape`) and **returns** `{report_md, sources}`
-  (writes no files itself).
-- **`save_report`** — the node writes `report.md` / `sources.jsonl` to the output
-  folder; **`commit_push` / `merge`**.
-- **Wire the graph:** replace the stub path; `classify_research_type` with only `new` live.
-- **Done-when:** a new question produces an approved brief and a cited report in its
-  folder, and merges; the report addresses the brief's `done-when` criteria.
+### Phase R1 — `new` mode end-to-end (the spine proof) ✅ DONE
+All in [src/nodes/research/nodes.py](../../src/nodes/research/nodes.py) +
+[src/prompts/research/](../../src/prompts/research/); graph wiring in
+[src/nodes/__init__.py](../../src/nodes/__init__.py).
+- **`classify_research_type`** — sets `ResearchMode.NEW` + the three output paths (R2/R3
+  add real detection). `frame_brief` → `brief.md` + sub-questions/done-when, surfaces
+  questions into `brief.md` + `state.questions` (mirrors `big_plan`).
+- **`approve_brief`** — the single HITL gate; reuses the shared `apply_gate_decision`
+  (bounded re-frame on rejection, answers recorded into `brief.md`).
+- **`research_agent`** — one agent via `run_research_agent` (Firecrawl allowlist + denied
+  built-ins + JSON envelope); **returns** `{report_md, sources}`, parsed via
+  `agent_text` + `parse_json_block`. **`save_report`** (the node) writes
+  `report.md`/`sources.jsonl`; the shared `commit_push`/`merge` land it.
+- **Graph:** the type split moved **before** bootstrap (`route_after_open_branch`) —
+  research skips `repo_bootstrap_check` (a knowledge repo has no test commands, §4.2);
+  the old `research`/`review` stubs were replaced.
+- **Permission boundary (#3):** enforced via `--disallowedTools` (invariant §5.7);
+  happy-path wiring proven, write-denial relies on that flag (spot-check in the notebook).
+- **Done-when (verified — 234 tests pass incl. `test_research_ticket_runs_end_to_end`;
+  ruff + pyright clean):** a research ticket flows classify → brief → gate → agent →
+  save → merge, landing a cited `report.md`. Manual verification:
+  [notebooks/phaseR1_playground.ipynb](../../notebooks/phaseR1_playground.ipynb).
 
 ### Phase R2 — `continuous` mode + watchlist scrape
 - **`load_prior_report`** (report/sources/watchlist/last_run) → **`research_agent`** in
@@ -270,6 +280,9 @@ machinery explained in [docs/runbooks/research.md](../runbooks/research.md) and 
 
 - **`frame_brief` depth in v1** — how much decomposition does a single-agent run need?
   Maybe just a sharp question + `done-when`, with the agent self-organizing the rest.
+- **Continuous folder identity (R2)** — R1 keys the output folder on `<ticket-id>-<slug>`
+  (collision-free, stable per ticket). For `continuous` to find a prior report, a
+  recurring ticket must keep a stable id — or R2 needs a separate key (topic / recurring-id).
 - **Research-agent timeout & progress** — a scrape+reason+write run far exceeds the
   600s `run_agent` default (continuous multi-site scrapes more so). Pick a research
   timeout and whether to stream progress.

@@ -41,7 +41,8 @@ ALLOWED_TOOLS: dict[ResearchMode, list[str]] = {
 # Belt-and-suspenders: deny the file-mutating / exec built-ins outright, so the agent
 # can't write even if the RESEARCH repo's own settings would allow it. `--disallowedTools`
 # takes precedence over any allow. The node writes every file (invariant §5.7).
-DISALLOWED_TOOLS: list[str] = ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"]
+# (Only names this CLI knows — an unknown one like "MultiEdit" just emits a noisy warning.)
+DISALLOWED_TOOLS: list[str] = ["Write", "Edit", "NotebookEdit", "Bash"]
 
 
 def allowed_tools_for(mode: ResearchMode) -> list[str]:
