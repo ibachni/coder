@@ -10,6 +10,7 @@ writes nothing. R2/R3 add the `continuous`/`discover` modes alongside this one.
 
 import json
 import re
+from datetime import datetime, timezone
 
 from langgraph.types import interrupt
 
@@ -22,6 +23,7 @@ from research_config import DISALLOWED_TOOLS, run_research_agent
 
 MAX_QUESTIONS = 6  # more blocking questions ⇒ the question is under-specified
 MAX_REPLANS = 3  # bounded brief-rejection re-frames before we surface FAILURE
+MAX_KNOWN_URLS = 50  # cap the dedup hint fed to the continuous agent so the prompt stays bounded
 
 
 def _slug(state: AgentState) -> str:
@@ -36,22 +38,28 @@ def _slug(state: AgentState) -> str:
 
 
 def classify_research_type(state: AgentState) -> AgentState:
-    """Pick the research mode and establish the output-folder identity.
+    """Pick the research mode (from the ticket) and establish the output-folder identity.
 
-    R1 implements only the `new` mode; R2/R3 add the real detection here (recurring +
-    prior report → `continuous`; a "find me sites to follow" ask → `discover`). Setting
-    the three paths up front means every downstream node — and a resume — shares one
-    folder. `plan_path` is the gated doc (brief.md), reusing the field coding uses for
-    plan.md.
+    The mode is declared on the ticket — `new` (default) | `continuous` | `discover`
+    (research plan §0, R2 decision). With stable ticket ids, the `<id>-<slug>` folder is
+    stable across runs, so a recurring (`continuous`) ticket re-uses its prior report.
+    `plan_path` is the gated doc (brief.md), reusing the field coding uses for plan.md.
+    `discover` (R3) routes as `new` until that mode lands.
     """
     assert state.ticket is not None and state.repo_path is not None
     repo, slug = state.repo_path, _slug(state)
-    state.research_mode = ResearchMode.NEW
+    state.research_mode = state.ticket.content.research_mode or ResearchMode.NEW
     state.plan_path = research_io.brief_path(repo, slug)
     state.report_path = research_io.report_path(repo, slug)
     state.watchlist_path = research_io.watchlist_path(repo, slug)
     state.step += 1
     return state
+
+
+def route_after_classify(state: AgentState) -> str:
+    """Route by research mode. `continuous` enters the update path; everything else
+    (incl. `discover` until R3) takes the `new`-mode brief flow."""
+    return "continuous" if state.research_mode is ResearchMode.CONTINUOUS else "new"
 
 
 def frame_brief(state: AgentState) -> AgentState:
@@ -248,5 +256,133 @@ def save_report(state: AgentState) -> AgentState:
         return state
     research_io.write_report(repo, slug, report_md)
     research_io.write_sources(repo, slug, art.get("sources") or [])
+    state.step += 1
+    return state
+
+
+# === Continuous mode (R2) ========================================================
+#
+# A recurring question: load the prior report's state, ask one agent for what's NEW
+# since the last run (scraping the watchlist + searching), then append only the delta.
+# "No new insights" is a valid terminal — we still record the run. Content-hash skipping
+# (WatchEntry.last_content_hash) and a light brief re-frame are deferred (plan §8).
+
+
+def _now() -> str:
+    """Today's date (UTC, ISO) for dated insight sections + last_run. Monkeypatched in tests."""
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def load_prior_report(state: AgentState) -> AgentState:
+    """Load the prior report's state for the update agent (watchlist, known sources, last run).
+
+    `known_urls` is the dedup hint handed to the agent; it's capped to the most-recent
+    `MAX_KNOWN_URLS` so a long-lived continuous ticket can't grow the prompt without
+    bound. Older sources may re-surface — an accepted trade, logged rather than silent.
+    """
+    assert state.ticket is not None and state.repo_path is not None
+    repo, slug = state.repo_path, _slug(state)
+    all_urls = [s["url"] for s in research_io.read_sources(repo, slug) if s.get("url")]
+    if len(all_urls) > MAX_KNOWN_URLS:
+        print(f"load_prior_report: {len(all_urls)} known sources; feeding the most recent {MAX_KNOWN_URLS}.")
+    state.artifact = {
+        "watchlist": [e.model_dump(mode="json") for e in research_io.read_watchlist(repo, slug)],
+        "known_urls": all_urls[-MAX_KNOWN_URLS:],
+        "last_run": research_io.read_last_run(repo, slug).get("ran_at"),
+    }
+    state.step += 1
+    return state
+
+
+def gather_updates(state: AgentState) -> AgentState:
+    """Single agent: scrape the watchlist + search for what's NEW since the last run.
+
+    Returns `{insights_md, sources, stale_urls}` — `insights_md` empty means "nothing new"
+    (a valid outcome, handled by `append_insights`). Same robustness as `research_agent`:
+    tolerate a non-zero exit with a usable envelope, fall back to prose, and record why on
+    failure. Adds its result to `state.artifact` (preserving the prior context).
+    """
+    assert state.ticket is not None and state.repo_path is not None
+    repo = state.repo_path
+    art = dict(state.artifact or {})
+
+    prompt = render(
+        "research/gather_updates",
+        ticket_title=state.ticket.content.title,
+        brief=state.ticket.content.body,
+        last_run=art.get("last_run"),
+        watchlist=art.get("watchlist") or [],
+        known_urls=art.get("known_urls") or [],
+    )
+
+    result = run_research_agent(prompt, repo, ResearchMode.CONTINUOUS)
+    try:
+        text = agent_text(result.stdout)
+    except RuntimeError as e:
+        return _fail(
+            state, f"update agent failed (exit {result.returncode}): {e}",
+            stdout=result.stdout, stderr=result.stderr,
+        )
+
+    insights_md, sources, stale_urls = _parse_updates(text)
+    art.update({"insights_md": insights_md, "new_sources": sources, "stale_urls": stale_urls})
+    state.artifact = art
+    state.step += 1
+    return state
+
+
+def route_after_gather(state: AgentState) -> str:
+    """A failed update goes to END; otherwise persist (even an empty delta records the run)."""
+    return "end" if state.status is Status.FAILURE else "append_insights"
+
+
+def _parse_updates(text: str) -> tuple[str, list[dict], list[str]]:
+    """Extract (insights_md, sources, stale_urls); fall back to prose like `_parse_report`."""
+    try:
+        data = parse_json_block(text)
+    except json.JSONDecodeError:
+        data = None
+    if isinstance(data, dict) and isinstance(data.get("insights_md"), str):
+        sources = data["sources"] if isinstance(data.get("sources"), list) else []
+        stale = data["stale_urls"] if isinstance(data.get("stale_urls"), list) else []
+        return data["insights_md"], sources, [str(u) for u in stale]
+    return text, [{"url": u} for u in _cited_urls(text)], []
+
+
+def append_insights(state: AgentState) -> AgentState:
+    """Persist the delta: prepend a dated insights section, append new sources, refresh
+    the watchlist (stale flags + last_scraped_at) and last_run. An empty delta is logged
+    and only the bookkeeping is updated — a valid "no new insights this run" terminal.
+    """
+    assert state.repo_path is not None, "append_insights requires repo_path"
+    repo, slug = state.repo_path, _slug(state)
+    art = state.artifact or {}
+    insights = (art.get("insights_md") or "").strip()
+    new_sources = art.get("new_sources") or []
+    stale_urls = set(art.get("stale_urls") or [])
+    today = _now()
+
+    if insights:
+        prior = research_io.read_report(repo, slug) or ""
+        research_io.write_report(repo, slug, f"## Insights — {today}\n\n{insights}\n\n{prior}")
+        existing = {s.get("url") for s in research_io.read_sources(repo, slug)}
+        fresh = [s for s in new_sources if s.get("url") and s["url"] not in existing]
+        if fresh:
+            research_io.append_sources(repo, slug, fresh)
+    else:
+        print(f"append_insights: no new insights for {slug} this run ({today}).")
+
+    # Refresh the watchlist: mark unreachable sites stale, stamp the scrape time.
+    watchlist = research_io.read_watchlist(repo, slug)
+    for entry in watchlist:
+        entry.last_scraped_at = today
+        if entry.url in stale_urls:
+            entry.status = "stale"
+    if watchlist:
+        research_io.write_watchlist(repo, slug, watchlist)
+
+    # Dedup memory lives in sources.jsonl (read back as known_urls); last_run only
+    # records *when* the question was last refreshed — the recency cutoff for next time.
+    research_io.write_last_run(repo, slug, {"ran_at": today})
     state.step += 1
     return state

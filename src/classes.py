@@ -59,6 +59,9 @@ class TicketContent(BaseModel):
     title: str
     body: str
     goals: Optional[str] = None  # ticket-level goal hierarchy + non-goals (§2.10)
+    # research tickets only: new (default) | continuous | discover. The recurring board
+    # sets `continuous`; absent ⇒ a one-off `new` question (research plan §0, R2 decision).
+    research_mode: Optional[ResearchMode] = None
 
 
 class Ticket(BaseModel):

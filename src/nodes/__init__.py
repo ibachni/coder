@@ -27,6 +27,7 @@ from nodes.coding.nodes import (
 )
 from nodes.research.nodes import (
     classify_research_type,
+    route_after_classify,
     frame_brief,
     route_after_frame_brief,
     approve_brief,
@@ -34,6 +35,10 @@ from nodes.research.nodes import (
     research_agent,
     route_after_research_agent,
     save_report,
+    load_prior_report,
+    gather_updates,
+    route_after_gather,
+    append_insights,
 )
 
 
@@ -76,6 +81,10 @@ graph.add_node("frame_brief", frame_brief)
 graph.add_node("approve_brief", approve_brief)
 graph.add_node("research_agent", research_agent)
 graph.add_node("save_report", save_report)
+# === Research `continuous` mode (R2) ===
+graph.add_node("load_prior_report", load_prior_report)
+graph.add_node("gather_updates", gather_updates)
+graph.add_node("append_insights", append_insights)
 # === Shared tail ===
 graph.add_node("commit_push", commit_push)
 graph.add_node("merge", merge)
@@ -117,8 +126,14 @@ graph.add_conditional_edges(
 graph.add_edge("implement_change", "select_next_change")
 graph.add_edge("final_review", "commit_push")
 
-# Research `new` mode (R1): classify → brief → gate → agent → save → land.
-graph.add_edge("classify_research_type", "frame_brief")
+# Research: classify by mode, then `new` or `continuous` (§4.2).
+graph.add_conditional_edges(
+    "classify_research_type",
+    route_after_classify,
+    {"new": "frame_brief", "continuous": "load_prior_report"},
+)
+
+# `new` mode (R1): brief → gate → agent → save → land.
 graph.add_conditional_edges(
     "frame_brief", route_after_frame_brief, {"end": END, "approve_brief": "approve_brief"}
 )
@@ -131,6 +146,13 @@ graph.add_conditional_edges(
     "research_agent", route_after_research_agent, {"end": END, "save_report": "save_report"}
 )
 graph.add_edge("save_report", "commit_push")
+
+# `continuous` mode (R2): load prior → gather what's new → append the delta → land.
+graph.add_edge("load_prior_report", "gather_updates")
+graph.add_conditional_edges(
+    "gather_updates", route_after_gather, {"end": END, "append_insights": "append_insights"}
+)
+graph.add_edge("append_insights", "commit_push")
 
 graph.add_edge("commit_push", "merge")
 graph.add_edge("merge", END)

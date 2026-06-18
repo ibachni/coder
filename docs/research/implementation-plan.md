@@ -185,15 +185,24 @@ All in [src/nodes/research/nodes.py](../../src/nodes/research/nodes.py) +
   save → merge, landing a cited `report.md`. Manual verification:
   [notebooks/phaseR1_playground.ipynb](../../notebooks/phaseR1_playground.ipynb).
 
-### Phase R2 — `continuous` mode + watchlist scrape
-- **`load_prior_report`** (report/sources/watchlist/last_run) → **`research_agent`** in
-  *update mode*: it scrapes each watchlist entry (sequentially, with its tools),
-  hashes content vs `last_content_hash` to skip unchanged, runs recency-scoped open
-  search, and reports only genuinely new findings; flag dead sites `stale`, never drop
-  silently → **`append_insights`** (dated section; update watchlist + last_run). "No new
-  insights" is a valid, logged terminal.
-- **Done-when:** a recurring ticket scrapes its watchlist, appends only new findings,
-  and is safe to run on a cron/loop trigger.
+### Phase R2 — `continuous` mode + watchlist scrape ✅ DONE
+Mode detection via **explicit `TicketContent.research_mode`** (R2 decision, Option 1):
+`classify_research_type` reads it; `route_after_classify` sends `continuous` down the
+update path. Nodes in [src/nodes/research/nodes.py](../../src/nodes/research/nodes.py),
+prompt [gather_updates.j2](../../src/prompts/research/gather_updates.j2).
+- **`load_prior_report`** stashes the watchlist + known source URLs + `last_run`.
+- **`gather_updates`** — one agent (`run_research_agent`, CONTINUOUS allowlist) scrapes the
+  watchlist + searches for what's new since `last_run`, returns `{insights_md, sources,
+  stale_urls}`; empty insights is a valid "nothing new" outcome. Same robustness as
+  `research_agent` (tolerant exit, prose fallback, recorded failures).
+- **`append_insights`** prepends a dated `## Insights — <date>` section, dedups + appends
+  sources, marks unreachable sites `stale` + stamps `last_scraped_at`, updates `last_run`.
+- **Deferred** (plan §8): content-hash skip (`last_content_hash`) and a light brief
+  re-frame — v1 re-scrapes and dedups against known sources instead.
+- **Done-when (verified — 250 tests pass incl. `test_continuous_ticket_runs_end_to_end`;
+  ruff + pyright clean):** a recurring ticket loads its prior report, appends only the new
+  delta, and merges; safe for a cron/loop trigger. Manual:
+  [notebooks/phaseR2_playground.ipynb](../../notebooks/phaseR2_playground.ipynb).
 
 ### Phase R3 — `discover` mode (builds the watchlist)
 - **`frame_brief`** (light) → **`research_agent`** in *discover mode*: find candidate

@@ -179,7 +179,7 @@ research/<ticket-slug>/
   brief.md           # framed question + sub-questions + done-when criteria
   sources.jsonl      # provenance of cited claims: {url, claim_ids, fetched_at, supports}
   watchlist.jsonl    # sites to scrape every continuous run (written by C, read by B)
-  last_run.json      # continuous only: {ran_at, seen_source_hashes, brief_version}
+  last_run.json      # continuous only: {ran_at} — the recency cutoff; dedup is via sources.jsonl
 ```
 
 `sources.jsonl` vs `watchlist.jsonl` are **not** the same: `sources.jsonl` records

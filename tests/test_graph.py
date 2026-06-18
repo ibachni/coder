@@ -18,11 +18,13 @@ from classes import (
     AgentState,
     ChangeStatus,
     Repo,
+    ResearchMode,
     Status,
     Ticket,
     TicketContent,
     TicketPriority,
     TicketType,
+    WatchEntry,
 )
 from ledger import load_changes
 
@@ -190,3 +192,60 @@ def test_research_ticket_runs_end_to_end(monkeypatch: pytest.MonkeyPatch, cloned
         ["git", "log", "--oneline", "main"], cwd=cloned_repo, capture_output=True, text=True
     ).stdout
     assert "ticket 8: state of AI agents" in log
+
+
+def test_continuous_ticket_runs_end_to_end(monkeypatch: pytest.MonkeyPatch, cloned_repo: Path) -> None:
+    """A `continuous` ticket flows open_branch → classify → load_prior → gather → append →
+    merge, prepending a dated insights section to the prior report. Agent is mocked."""
+    import research_io
+    import nodes.research.nodes as rn
+
+    ticket = Ticket(
+        content=TicketContent(
+            id=5,
+            type=TicketType.RESEARCH,
+            priority=TicketPriority.HIGH,
+            repo=Repo.RESEARCH,
+            title="AI agent news",
+            body="track new AI agent releases",
+            research_mode=ResearchMode.CONTINUOUS,
+        ),
+        path=Path("/tmp/ticket"),
+    )
+    slug = "5-ai-agent-news"
+    # Pre-seed a prior report + watchlist, committed so open_branch sees a clean tree.
+    research_io.write_report(cloned_repo, slug, "# AI agent news\n\nprior body")
+    research_io.write_watchlist(cloned_repo, slug, [WatchEntry(url="https://blog.example", kind="blog")])
+    research_io.write_last_run(cloned_repo, slug, {"ran_at": "2026-06-01", "seen_source_urls": []})
+    for cmd in (["git", "add", "-A"], ["git", "commit", "-qm", "seed"], ["git", "push", "-q"]):
+        subprocess.run(cmd, cwd=cloned_repo, check=True, capture_output=True)
+
+    updates = {
+        "insights_md": "Release X shipped [a](https://blog.example/x).",
+        "sources": [{"url": "https://blog.example/x"}],
+        "stale_urls": [],
+    }
+    monkeypatch.setattr(gn, "get_ticket", lambda _id: ticket)
+    monkeypatch.setattr(gn, "resolve_repo", lambda _repo: cloned_repo)
+    monkeypatch.setattr(
+        rn,
+        "run_research_agent",
+        lambda *a, **k: subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps({"is_error": False, "result": json.dumps(updates)}), stderr=""
+        ),
+    )
+    monkeypatch.setattr(rn, "_now", lambda: "2026-06-18")
+    monkeypatch.setenv("CODER_MERGE_MODE", "squash")
+
+    from nodes import graph
+
+    config = {"configurable": {"thread_id": uuid.uuid4().hex}}
+    graph.invoke(AgentState(status=Status.CONT, step=0, artifact={}, ticket_id="5"), config)
+
+    report = (cloned_repo / "research" / slug / "report.md").read_text()
+    assert report.startswith("## Insights — 2026-06-18")
+    assert "prior body" in report  # prior report retained
+    log = subprocess.run(
+        ["git", "log", "--oneline", "main"], cwd=cloned_repo, capture_output=True, text=True
+    ).stdout
+    assert "ticket 5: AI agent news" in log

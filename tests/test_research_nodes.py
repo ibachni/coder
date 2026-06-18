@@ -16,12 +16,14 @@ import nodes.research.nodes as rn
 import research_io
 from classes import (
     AgentState,
+    Repo,
     ResearchMode,
     Status,
     Ticket,
     TicketContent,
     TicketPriority,
     TicketType,
+    WatchEntry,
 )
 
 TITLE = "Future of AI agents"
@@ -34,24 +36,25 @@ BRIEF = {
 REPORT = {"report_md": "# Agents\n\nThey are improving [src](https://a.example).", "sources": [{"url": "https://a.example"}]}
 
 
-def _ticket() -> Ticket:
+def _ticket(mode: ResearchMode | None = None) -> Ticket:
     return Ticket(
         content=TicketContent(
             id=9,
             type=TicketType.RESEARCH,
             priority=TicketPriority.HIGH,
-            repo=__import__("classes").Repo.RESEARCH,
+            repo=Repo.RESEARCH,
             title=TITLE,
             body="Where are AI agents heading?",
+            research_mode=mode,
         ),
         path=Path("/tmp/t"),
     )
 
 
-def _state(tmp_path: Path, **kw) -> AgentState:
+def _state(tmp_path: Path, *, mode: ResearchMode | None = None, **kw) -> AgentState:
     kw.setdefault("status", Status.CONT)
     kw.setdefault("artifact", {})
-    return AgentState(step=0, ticket_id="9", ticket=_ticket(), repo_path=tmp_path, **kw)
+    return AgentState(step=0, ticket_id="9", ticket=_ticket(mode), repo_path=tmp_path, **kw)
 
 
 def _completed(stdout: str, code: int = 0) -> subprocess.CompletedProcess:
@@ -233,3 +236,125 @@ class TestSaveReport:
 
     def test_missing_report_fails(self, tmp_path: Path) -> None:
         assert rn.save_report(_state(tmp_path, artifact={})).status is Status.FAILURE
+
+
+UPDATES = {
+    "insights_md": "## New\n\nBig news [a](https://new.example).",
+    "sources": [{"url": "https://new.example"}],
+    "stale_urls": ["https://dead.example"],
+}
+
+
+class TestContinuous:
+    def test_classify_reads_continuous_mode(self, tmp_path: Path) -> None:
+        out = rn.classify_research_type(_state(tmp_path, mode=ResearchMode.CONTINUOUS))
+        assert out.research_mode is ResearchMode.CONTINUOUS
+
+    def test_classify_defaults_to_new(self, tmp_path: Path) -> None:
+        assert rn.classify_research_type(_state(tmp_path)).research_mode is ResearchMode.NEW
+
+    def test_route_after_classify(self, tmp_path: Path) -> None:
+        assert rn.route_after_classify(_state(tmp_path, research_mode=ResearchMode.CONTINUOUS)) == "continuous"
+        assert rn.route_after_classify(_state(tmp_path, research_mode=ResearchMode.NEW)) == "new"
+        assert rn.route_after_classify(_state(tmp_path, research_mode=ResearchMode.DISCOVER)) == "new"
+
+    def test_ticket_json_deserializes_research_mode(self) -> None:
+        # The field is R2's entire trigger — confirm it coerces from a raw ticket JSON.
+        raw = {"id": 1, "type": "research", "priority": 3, "repo": "research",
+               "title": "x", "body": "y", "research_mode": "continuous"}
+        assert TicketContent.model_validate(raw).research_mode is ResearchMode.CONTINUOUS
+        raw.pop("research_mode")
+        assert TicketContent.model_validate(raw).research_mode is None  # absent ⇒ new (default)
+
+    def test_gather_updates_uses_continuous_allowlist(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        captured: dict = {}
+
+        def fake(prompt, repo, mode, **k) -> subprocess.CompletedProcess:
+            captured["mode"] = mode
+            return _completed(_envelope(UPDATES))
+
+        monkeypatch.setattr(rn, "run_research_agent", fake)
+        rn.gather_updates(_state(tmp_path, mode=ResearchMode.CONTINUOUS))
+        assert captured["mode"] is ResearchMode.CONTINUOUS
+
+    def test_load_prior_report_stashes_context(self, tmp_path: Path) -> None:
+        research_io.write_watchlist(tmp_path, SLUG, [WatchEntry(url="https://a.example", kind="blog")])
+        research_io.write_sources(tmp_path, SLUG, [{"url": "https://known.example"}])
+        research_io.write_last_run(tmp_path, SLUG, {"ran_at": "2026-06-01"})
+        out = rn.load_prior_report(_state(tmp_path, mode=ResearchMode.CONTINUOUS))
+        assert out.artifact["known_urls"] == ["https://known.example"]
+        assert out.artifact["last_run"] == "2026-06-01"
+        assert out.artifact["watchlist"][0]["url"] == "https://a.example"
+
+    def test_gather_updates_stashes_delta(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(rn, "run_research_agent", lambda *a, **k: _completed(_envelope(UPDATES)))
+        out = rn.gather_updates(_state(tmp_path, mode=ResearchMode.CONTINUOUS))
+        assert out.status is Status.CONT
+        assert out.artifact["insights_md"].startswith("## New")
+        assert out.artifact["new_sources"] == [{"url": "https://new.example"}]
+        assert out.artifact["stale_urls"] == ["https://dead.example"]
+        assert rn.route_after_gather(out) == "append_insights"
+
+    def test_gather_updates_empty_delta_is_valid(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        empty = {"insights_md": "", "sources": [], "stale_urls": []}
+        monkeypatch.setattr(rn, "run_research_agent", lambda *a, **k: _completed(_envelope(empty)))
+        out = rn.gather_updates(_state(tmp_path, mode=ResearchMode.CONTINUOUS))
+        assert out.status is Status.CONT
+        assert out.artifact["insights_md"] == ""
+        assert rn.route_after_gather(out) == "append_insights"
+
+    def test_gather_updates_agent_error_fails(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(
+            rn, "run_research_agent", lambda *a, **k: _completed(_envelope("boom", is_error=True))
+        )
+        out = rn.gather_updates(_state(tmp_path, mode=ResearchMode.CONTINUOUS))
+        assert out.status is Status.FAILURE
+        assert rn.route_after_gather(out) == "end"
+
+    def test_append_insights_prepends_and_updates(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(rn, "_now", lambda: "2026-06-18")
+        research_io.write_report(tmp_path, SLUG, "# Report\n\nold body")
+        research_io.write_sources(tmp_path, SLUG, [{"url": "https://known.example"}])
+        research_io.write_watchlist(
+            tmp_path, SLUG, [WatchEntry(url="https://a.example"), WatchEntry(url="https://dead.example")]
+        )
+        state = _state(
+            tmp_path,
+            mode=ResearchMode.CONTINUOUS,
+            artifact={
+                "insights_md": "Fresh finding [n](https://new.example).",
+                "new_sources": [{"url": "https://new.example"}, {"url": "https://known.example"}],
+                "stale_urls": ["https://dead.example"],
+            },
+        )
+        rn.append_insights(state)
+
+        report = research_io.read_report(tmp_path, SLUG)
+        assert report.startswith("## Insights — 2026-06-18")
+        assert "old body" in report  # prior report retained beneath the new section
+        # sources: the already-known one isn't duplicated; the new one is appended.
+        assert [s["url"] for s in research_io.read_sources(tmp_path, SLUG)] == [
+            "https://known.example",
+            "https://new.example",
+        ]
+        wl = {e.url: e for e in research_io.read_watchlist(tmp_path, SLUG)}
+        assert wl["https://dead.example"].status == "stale"
+        assert wl["https://a.example"].last_scraped_at == "2026-06-18"
+        # last_run records only when (dedup memory is sources.jsonl, not last_run)
+        assert research_io.read_last_run(tmp_path, SLUG) == {"ran_at": "2026-06-18"}
+
+    def test_append_insights_no_new_only_bookkeeping(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(rn, "_now", lambda: "2026-06-18")
+        research_io.write_report(tmp_path, SLUG, "# Report\n\nbody")
+        research_io.write_watchlist(tmp_path, SLUG, [WatchEntry(url="https://a.example")])
+        state = _state(
+            tmp_path,
+            mode=ResearchMode.CONTINUOUS,
+            artifact={"insights_md": "  ", "new_sources": [], "stale_urls": []},
+        )
+        rn.append_insights(state)
+        assert research_io.read_report(tmp_path, SLUG) == "# Report\n\nbody"  # unchanged
+        assert research_io.read_last_run(tmp_path, SLUG)["ran_at"] == "2026-06-18"
+        assert research_io.read_watchlist(tmp_path, SLUG)[0].last_scraped_at == "2026-06-18"
