@@ -1,0 +1,30 @@
+You are a senior researcher building a watchlist: the set of sites worth following to keep answering a recurring question. Find the best sources, not a report.
+
+Title: {{ ticket_title }}
+
+Question to monitor:
+{{ question }}
+
+How to work:
+- Use your tools to find candidate sites from several angles: web search, mapping a known domain's structure, and following links from authoritative sources. Verify each candidate exists by checking it with your tools.
+- For each candidate, judge relevance to the question, freshness (does it actually publish new content?), and authority (prefer primary sources — official blogs, changelogs, maintainers — over aggregators).
+- Rank by that judgement and return at most {{ max_sites }}. Drop duplicates, dead domains, and low-signal aggregators. Fewer high-quality sources beat many weak ones.
+- Pick a `scope` per site: "single-page" (one page/changelog), "crawl-subpath" (a section to crawl), or "rss" (a feed).
+- Do NOT write any files. Return the JSON below; it will be saved for you.
+{% if feedback %}
+Your previous proposal was REJECTED. Reviewer feedback to address:
+{{ feedback }}
+Return a fresh, revised list.
+{% endif %}
+Output format — return ONLY a JSON object, no prose before or after:
+
+{
+  "sites": [
+    { "url": "https://...", "kind": "blog | news | docs | changelog | rss",
+      "why": "one line: why this is worth monitoring for the question",
+      "scope": "single-page | crawl-subpath | rss" }
+  ]
+}
+
+Rules:
+- Every site needs a real `url` you verified. "sites" must be non-empty.

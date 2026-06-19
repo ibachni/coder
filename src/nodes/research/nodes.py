@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from langgraph.types import interrupt
 
 import research_io
-from classes import AgentState, ResearchMode, Status
+from classes import AgentState, ResearchMode, Status, WatchEntry
 from nodes.general.nodes import apply_gate_decision, render_questions_section
 from nodes.helpers import agent_text, parse_json_block, run_agent, slugify
 from prompt_loader import render
@@ -24,6 +24,7 @@ from research_config import DISALLOWED_TOOLS, run_research_agent
 MAX_QUESTIONS = 6  # more blocking questions ⇒ the question is under-specified
 MAX_REPLANS = 3  # bounded brief-rejection re-frames before we surface FAILURE
 MAX_KNOWN_URLS = 50  # cap the dedup hint fed to the continuous agent so the prompt stays bounded
+MAX_WATCHLIST = 15  # cap the sites `discover` proposes for the watchlist
 
 
 def _slug(state: AgentState) -> str:
@@ -57,9 +58,12 @@ def classify_research_type(state: AgentState) -> AgentState:
 
 
 def route_after_classify(state: AgentState) -> str:
-    """Route by research mode. `continuous` enters the update path; everything else
-    (incl. `discover` until R3) takes the `new`-mode brief flow."""
-    return "continuous" if state.research_mode is ResearchMode.CONTINUOUS else "new"
+    """Route by research mode: `continuous` updates, `discover` builds a watchlist, else `new`."""
+    if state.research_mode is ResearchMode.CONTINUOUS:
+        return "continuous"
+    if state.research_mode is ResearchMode.DISCOVER:
+        return "discover"
+    return "new"
 
 
 def frame_brief(state: AgentState) -> AgentState:
@@ -386,3 +390,178 @@ def append_insights(state: AgentState) -> AgentState:
     research_io.write_last_run(repo, slug, {"ran_at": today})
     state.step += 1
     return state
+
+
+# === Discover mode (R3) ==========================================================
+#
+# Given a question, find the sites worth following and emit watchlist.jsonl — the input
+# the `continuous` mode (R2) re-scrapes. One agent finds + scores candidates; a HITL gate
+# keeps/drops/adds; the node writes the watchlist (empty scrape state so the first
+# continuous run treats everything as new) and scaffolds the folder. The light brief
+# re-frame from the runbook is folded into the discover prompt for v1.
+
+
+def discover_sites(state: AgentState) -> AgentState:
+    """One agent finds + ranks candidate sites to monitor for the question (search/scrape/map).
+
+    Returns a list of `{url, kind, why, scope}` (the node, not the agent, writes files).
+    Same robustness as the other agents: tolerant exit, prose→URL fallback, recorded
+    failures. On a prior rejection, the reviewer's feedback is fed back in.
+    """
+    assert state.ticket is not None and state.repo_path is not None
+    repo = state.repo_path
+
+    feedback = None
+    if state.approval and not state.approval.get("approved", False):
+        feedback = state.approval.get("feedback")
+
+    prompt = render(
+        "research/discover_sites",
+        ticket_title=state.ticket.content.title,
+        question=state.ticket.content.body,
+        max_sites=MAX_WATCHLIST,
+        feedback=feedback,
+    )
+
+    result = run_research_agent(prompt, repo, ResearchMode.DISCOVER)
+    try:
+        text = agent_text(result.stdout)
+    except RuntimeError as e:
+        return _fail(
+            state, f"discover agent failed (exit {result.returncode}): {e}",
+            stdout=result.stdout, stderr=result.stderr,
+        )
+
+    candidates = _parse_sites(text)
+    if not candidates:
+        return _fail(state, "discover found no candidate sites", stdout=result.stdout)
+
+    if len(candidates) > MAX_WATCHLIST:
+        print(f"discover_sites: {len(candidates)} candidates; keeping the top {MAX_WATCHLIST}.")
+    art = dict(state.artifact or {})
+    art["candidates"] = candidates[:MAX_WATCHLIST]
+    state.artifact = art
+    state.step += 1
+    return state
+
+
+def route_after_discover(state: AgentState) -> str:
+    """A failed discovery goes to END; a candidate list to the approval gate."""
+    return "end" if state.status is Status.FAILURE else "approve_watchlist"
+
+
+def _parse_sites(text: str) -> list[dict]:
+    """Extract candidate sites, deduped by URL; fall back to bare URLs if the JSON is off."""
+    try:
+        data = parse_json_block(text)
+    except json.JSONDecodeError:
+        data = None
+    if isinstance(data, dict) and isinstance(data.get("sites"), list):
+        out: list[dict] = []
+        seen: set[str] = set()
+        for s in data["sites"]:
+            if isinstance(s, dict) and s.get("url") and s["url"] not in seen:
+                seen.add(s["url"])
+                out.append(
+                    {
+                        "url": s["url"],
+                        "kind": s.get("kind", ""),
+                        "why": s.get("why", ""),
+                        "scope": s.get("scope", "single-page"),
+                    }
+                )
+        return out
+    return [{"url": u} for u in _cited_urls(text)]  # _cited_urls already dedups
+
+
+def approve_watchlist(state: AgentState) -> AgentState:
+    """HITL gate: the user approves / edits / rejects the proposed watchlist.
+
+    `interrupt()` lives here (monkeypatchable). Resume `{approved, entries?, feedback?}`:
+    on approval the final list is `entries` (the user's keep/drop/add) or the candidates
+    as-is; on rejection, a bounded re-discovery (then FAILURE). Mirrors the brief gate.
+    """
+    art = dict(state.artifact or {})
+    candidates = art.get("candidates") or []
+    resume = interrupt({"candidates": candidates})
+    state.approval = resume if isinstance(resume, dict) else {"approved": False}
+
+    if state.approval.get("approved") is True:
+        entries = state.approval.get("entries")
+        art["watchlist"] = entries if isinstance(entries, list) else candidates
+        state.artifact = art
+    elif state.replans < MAX_REPLANS:
+        state.replans += 1
+    else:
+        state.status = Status.FAILURE
+
+    state.step += 1
+    return state
+
+
+def route_after_watchlist_approval(state: AgentState) -> str:
+    """Approved → write; rejected → re-discover (bounded); exhausted → END."""
+    if state.approval and state.approval.get("approved") is True:
+        return "write_watchlist"
+    if state.status is Status.FAILURE:
+        return "end"
+    return "discover_sites"
+
+
+def write_watchlist(state: AgentState) -> AgentState:
+    """Persist watchlist.jsonl and scaffold the folder continuous-ready.
+
+    Merges by URL with any existing watchlist: a re-discovered site KEEPS its prior scrape
+    state (`last_scraped_at`/`last_content_hash`) and is un-stale'd; a genuinely new site
+    is added with empty scrape state (only `added_at`), so the first continuous run treats
+    it as new; sites dropped from the approved list are removed. Scaffolds an empty
+    report.md/brief.md so the same ticket re-run as `continuous` has a folder to update.
+
+    NB: the folder is keyed `<id>-<title-slug>`, so the discover→continuous handoff needs
+    the ticket's title to stay stable across the mode flip (R2 decision, plan §8).
+    """
+    assert state.ticket is not None and state.repo_path is not None
+    repo, slug = state.repo_path, _slug(state)
+    art = state.artifact or {}
+    raw = art.get("watchlist") or art.get("candidates") or []
+    today = _now()
+
+    prior = {e.url: e for e in research_io.read_watchlist(repo, slug)}
+    entries: list[WatchEntry] = []
+    seen: set[str] = set()
+    for e in raw:
+        if not (isinstance(e, dict) and e.get("url")) or e["url"] in seen:
+            continue
+        url = e["url"]
+        seen.add(url)
+        if url in prior:
+            kept = prior[url]
+            kept.status = "active"  # re-proposed ⇒ verified alive again
+            entries.append(kept)  # preserve last_scraped_at / last_content_hash
+        else:
+            entries.append(
+                WatchEntry(
+                    url=url,
+                    kind=e.get("kind", ""),
+                    why=e.get("why", ""),
+                    scope=e.get("scope", "single-page"),
+                    added_at=today,
+                )
+            )
+    if not entries:
+        return _fail(state, "no valid watchlist entries to write")
+
+    research_io.write_watchlist(repo, slug, entries)
+    if research_io.read_report(repo, slug) is None:
+        research_io.write_report(
+            repo, slug, f"# {state.ticket.content.title}\n\n_Monitoring set up {today}; no findings yet._\n"
+        )
+    if research_io.read_brief(repo, slug) is None:
+        research_io.write_brief(repo, slug, f"## Brief\n\n{state.ticket.content.body}\n")
+    state.step += 1
+    return state
+
+
+def route_after_write_watchlist(state: AgentState) -> str:
+    """A failed write goes to END; otherwise land the watchlist."""
+    return "end" if state.status is Status.FAILURE else "commit_push"

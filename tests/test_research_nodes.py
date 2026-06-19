@@ -256,7 +256,7 @@ class TestContinuous:
     def test_route_after_classify(self, tmp_path: Path) -> None:
         assert rn.route_after_classify(_state(tmp_path, research_mode=ResearchMode.CONTINUOUS)) == "continuous"
         assert rn.route_after_classify(_state(tmp_path, research_mode=ResearchMode.NEW)) == "new"
-        assert rn.route_after_classify(_state(tmp_path, research_mode=ResearchMode.DISCOVER)) == "new"
+        assert rn.route_after_classify(_state(tmp_path, research_mode=ResearchMode.DISCOVER)) == "discover"
 
     def test_ticket_json_deserializes_research_mode(self) -> None:
         # The field is R2's entire trigger — confirm it coerces from a raw ticket JSON.
@@ -358,3 +358,121 @@ class TestContinuous:
         assert research_io.read_report(tmp_path, SLUG) == "# Report\n\nbody"  # unchanged
         assert research_io.read_last_run(tmp_path, SLUG)["ran_at"] == "2026-06-18"
         assert research_io.read_watchlist(tmp_path, SLUG)[0].last_scraped_at == "2026-06-18"
+
+
+SITES = {
+    "sites": [
+        {"url": "https://a.example", "kind": "blog", "why": "primary", "scope": "single-page"},
+        {"url": "https://b.example/feed", "kind": "news", "why": "fast", "scope": "rss"},
+    ]
+}
+
+
+class TestDiscover:
+    def _discover_state(self, tmp_path: Path, **kw) -> AgentState:
+        return _state(tmp_path, mode=ResearchMode.DISCOVER, **kw)
+
+    def test_discover_sites_stashes_candidates(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(rn, "run_research_agent", lambda *a, **k: _completed(_envelope(SITES)))
+        out = rn.discover_sites(self._discover_state(tmp_path))
+        assert out.status is Status.CONT
+        assert [c["url"] for c in out.artifact["candidates"]] == ["https://a.example", "https://b.example/feed"]
+        assert rn.route_after_discover(out) == "approve_watchlist"
+
+    def test_discover_uses_discover_allowlist(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        captured: dict = {}
+
+        def fake(prompt, repo, mode, **k) -> subprocess.CompletedProcess:
+            captured["mode"] = mode
+            return _completed(_envelope(SITES))
+
+        monkeypatch.setattr(rn, "run_research_agent", fake)
+        rn.discover_sites(self._discover_state(tmp_path))
+        assert captured["mode"] is ResearchMode.DISCOVER
+
+    def test_discover_no_sites_fails(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(rn, "run_research_agent", lambda *a, **k: _completed(_envelope({"sites": []})))
+        out = rn.discover_sites(self._discover_state(tmp_path))
+        assert out.status is Status.FAILURE
+        assert rn.route_after_discover(out) == "end"
+
+    def test_discover_dedups_candidates(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        dup = {"sites": [
+            {"url": "https://a.example", "kind": "blog"},
+            {"url": "https://a.example", "kind": "news"},  # same URL, kept once
+            {"url": "https://b.example"},
+        ]}
+        monkeypatch.setattr(rn, "run_research_agent", lambda *a, **k: _completed(_envelope(dup)))
+        out = rn.discover_sites(self._discover_state(tmp_path))
+        assert [c["url"] for c in out.artifact["candidates"]] == ["https://a.example", "https://b.example"]
+
+    def test_parse_sites_prose_fallback(self) -> None:
+        sites = rn._parse_sites("Follow https://x.example/blog and https://y.example for this.")
+        assert [s["url"] for s in sites] == ["https://x.example/blog", "https://y.example"]
+
+    def test_discover_revise_mode_feeds_feedback(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        captured: dict = {}
+
+        def fake(prompt, repo, mode, **k) -> subprocess.CompletedProcess:
+            captured["prompt"] = prompt
+            return _completed(_envelope(SITES))
+
+        monkeypatch.setattr(rn, "run_research_agent", fake)
+        rn.discover_sites(self._discover_state(tmp_path, approval={"approved": False, "feedback": "more primary sources"}))
+        assert "more primary sources" in captured["prompt"]
+
+    def test_approve_watchlist_approved_routes_to_write(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(rn, "interrupt", lambda payload: {"approved": True})
+        out = rn.approve_watchlist(self._discover_state(tmp_path, artifact={"candidates": SITES["sites"]}))
+        assert out.artifact["watchlist"] == SITES["sites"]  # no edits ⇒ candidates as-is
+        assert rn.route_after_watchlist_approval(out) == "write_watchlist"
+
+    def test_approve_watchlist_honors_user_edits(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        kept = [SITES["sites"][0]]
+        monkeypatch.setattr(rn, "interrupt", lambda payload: {"approved": True, "entries": kept})
+        out = rn.approve_watchlist(self._discover_state(tmp_path, artifact={"candidates": SITES["sites"]}))
+        assert out.artifact["watchlist"] == kept
+
+    def test_approve_watchlist_rejected_re_discovers(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(rn, "interrupt", lambda payload: {"approved": False, "feedback": "more primary sources"})
+        out = rn.approve_watchlist(self._discover_state(tmp_path, artifact={"candidates": SITES["sites"]}))
+        assert out.replans == 1
+        assert rn.route_after_watchlist_approval(out) == "discover_sites"
+
+    def test_write_watchlist_persists_and_scaffolds(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(rn, "_now", lambda: "2026-06-19")
+        out = rn.write_watchlist(self._discover_state(tmp_path, artifact={"watchlist": SITES["sites"]}))
+        assert out.status is Status.CONT
+        wl = research_io.read_watchlist(tmp_path, SLUG)
+        assert [e.url for e in wl] == ["https://a.example", "https://b.example/feed"]
+        # empty scrape state so the first continuous run treats every site as new
+        assert wl[0].added_at == "2026-06-19"
+        assert wl[0].last_scraped_at is None and wl[0].status == "active"
+        # folder scaffolded continuous-ready
+        assert research_io.read_report(tmp_path, SLUG) is not None
+        assert research_io.read_brief(tmp_path, SLUG) is not None
+        assert rn.route_after_write_watchlist(out) == "commit_push"
+
+    def test_write_watchlist_no_valid_entries_fails(self, tmp_path: Path) -> None:
+        out = rn.write_watchlist(self._discover_state(tmp_path, artifact={"watchlist": [{"kind": "blog"}]}))
+        assert out.status is Status.FAILURE
+        assert rn.route_after_write_watchlist(out) == "end"
+
+    def test_write_watchlist_merges_preserving_scrape_state(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(rn, "_now", lambda: "2026-06-19")
+        # Prior watchlist: one already-scraped (and stale) site, one that will be dropped.
+        research_io.write_watchlist(tmp_path, SLUG, [
+            WatchEntry(url="https://a.example", last_scraped_at="2026-06-01", last_content_hash="h1",
+                       status="stale", added_at="2026-05-01"),
+            WatchEntry(url="https://old.example", added_at="2026-05-01"),
+        ])
+        # Re-discover: keep a.example, add new.example, drop old.example.
+        raw = [{"url": "https://a.example", "kind": "blog"}, {"url": "https://new.example"}]
+        rn.write_watchlist(self._discover_state(tmp_path, artifact={"watchlist": raw}))
+
+        wl = {e.url: e for e in research_io.read_watchlist(tmp_path, SLUG)}
+        assert set(wl) == {"https://a.example", "https://new.example"}  # old dropped
+        assert wl["https://a.example"].last_content_hash == "h1"  # scrape state preserved
+        assert wl["https://a.example"].status == "active"  # re-proposed ⇒ un-staled
+        assert wl["https://new.example"].last_scraped_at is None  # new ⇒ empty scrape state
+        assert wl["https://new.example"].added_at == "2026-06-19"

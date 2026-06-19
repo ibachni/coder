@@ -39,6 +39,12 @@ from nodes.research.nodes import (
     gather_updates,
     route_after_gather,
     append_insights,
+    discover_sites,
+    route_after_discover,
+    approve_watchlist,
+    route_after_watchlist_approval,
+    write_watchlist,
+    route_after_write_watchlist,
 )
 
 
@@ -85,6 +91,10 @@ graph.add_node("save_report", save_report)
 graph.add_node("load_prior_report", load_prior_report)
 graph.add_node("gather_updates", gather_updates)
 graph.add_node("append_insights", append_insights)
+# === Research `discover` mode (R3) ===
+graph.add_node("discover_sites", discover_sites)
+graph.add_node("approve_watchlist", approve_watchlist)
+graph.add_node("write_watchlist", write_watchlist)
 # === Shared tail ===
 graph.add_node("commit_push", commit_push)
 graph.add_node("merge", merge)
@@ -126,11 +136,11 @@ graph.add_conditional_edges(
 graph.add_edge("implement_change", "select_next_change")
 graph.add_edge("final_review", "commit_push")
 
-# Research: classify by mode, then `new` or `continuous` (§4.2).
+# Research: classify by mode, then `new` / `continuous` / `discover` (§4.2).
 graph.add_conditional_edges(
     "classify_research_type",
     route_after_classify,
-    {"new": "frame_brief", "continuous": "load_prior_report"},
+    {"new": "frame_brief", "continuous": "load_prior_report", "discover": "discover_sites"},
 )
 
 # `new` mode (R1): brief → gate → agent → save → land.
@@ -153,6 +163,19 @@ graph.add_conditional_edges(
     "gather_updates", route_after_gather, {"end": END, "append_insights": "append_insights"}
 )
 graph.add_edge("append_insights", "commit_push")
+
+# `discover` mode (R3): find sites → approve (HITL) → write watchlist → land.
+graph.add_conditional_edges(
+    "discover_sites", route_after_discover, {"end": END, "approve_watchlist": "approve_watchlist"}
+)
+graph.add_conditional_edges(
+    "approve_watchlist",
+    route_after_watchlist_approval,
+    {"write_watchlist": "write_watchlist", "discover_sites": "discover_sites", "end": END},
+)
+graph.add_conditional_edges(
+    "write_watchlist", route_after_write_watchlist, {"end": END, "commit_push": "commit_push"}
+)
 
 graph.add_edge("commit_push", "merge")
 graph.add_edge("merge", END)

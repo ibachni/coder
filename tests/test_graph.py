@@ -249,3 +249,51 @@ def test_continuous_ticket_runs_end_to_end(monkeypatch: pytest.MonkeyPatch, clon
         ["git", "log", "--oneline", "main"], cwd=cloned_repo, capture_output=True, text=True
     ).stdout
     assert "ticket 5: AI agent news" in log
+
+
+def test_discover_ticket_runs_end_to_end(monkeypatch: pytest.MonkeyPatch, cloned_repo: Path) -> None:
+    """A `discover` ticket flows classify → discover_sites → approve_watchlist → write →
+    merge, landing watchlist.jsonl (empty scrape state) that R2 can consume. Agent + gate mocked."""
+    import nodes.research.nodes as rn
+
+    ticket = Ticket(
+        content=TicketContent(
+            id=6,
+            type=TicketType.RESEARCH,
+            priority=TicketPriority.HIGH,
+            repo=Repo.RESEARCH,
+            title="AI agent sources to follow",
+            body="find sites to monitor for AI coding agent news",
+            research_mode=ResearchMode.DISCOVER,
+        ),
+        path=Path("/tmp/ticket"),
+    )
+    sites = {"sites": [{"url": "https://blog.example", "kind": "blog", "why": "primary", "scope": "single-page"}]}
+    monkeypatch.setattr(gn, "get_ticket", lambda _id: ticket)
+    monkeypatch.setattr(gn, "resolve_repo", lambda _repo: cloned_repo)
+    monkeypatch.setattr(
+        rn,
+        "run_research_agent",
+        lambda *a, **k: subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps({"is_error": False, "result": json.dumps(sites)}), stderr=""
+        ),
+    )
+    monkeypatch.setattr(rn, "interrupt", lambda payload: {"approved": True})
+    monkeypatch.setattr(rn, "_now", lambda: "2026-06-19")
+    monkeypatch.setenv("CODER_MERGE_MODE", "squash")
+
+    from nodes import graph
+    import research_io
+
+    config = {"configurable": {"thread_id": uuid.uuid4().hex}}
+    graph.invoke(AgentState(status=Status.CONT, step=0, artifact={}, ticket_id="6"), config)
+
+    slug = "6-ai-agent-sources-to-follow"
+    watch = research_io.read_watchlist(cloned_repo, slug)
+    assert [e.url for e in watch] == ["https://blog.example"]
+    assert watch[0].last_scraped_at is None  # empty scrape state ⇒ first continuous run sees it as new
+    assert research_io.read_report(cloned_repo, slug) is not None  # scaffolded continuous-ready
+    log = subprocess.run(
+        ["git", "log", "--oneline", "main"], cwd=cloned_repo, capture_output=True, text=True
+    ).stdout
+    assert "ticket 6: AI agent sources to follow" in log

@@ -204,14 +204,24 @@ prompt [gather_updates.j2](../../src/prompts/research/gather_updates.j2).
   delta, and merges; safe for a cron/loop trigger. Manual:
   [notebooks/phaseR2_playground.ipynb](../../notebooks/phaseR2_playground.ipynb).
 
-### Phase R3 — `discover` mode (builds the watchlist)
-- **`frame_brief`** (light) → **`research_agent`** in *discover mode*: find candidate
-  sites with its tools (`firecrawl_search`, `firecrawl_scrape`, **+`firecrawl_map`** to
-  enumerate a domain), score by relevance + freshness + authority, return a ranked
-  list (log cuts) → **`approve_watchlist`** (HITL) → **`write_watchlist`** (seed empty
-  scrape state so the first continuous run treats all as new; scaffold the folder).
-- **Done-when:** a question yields an approved `watchlist.jsonl` that R2 consumes
-  unchanged; a `new` run can optionally chain into discover to set up monitoring.
+### Phase R3 — `discover` mode (builds the watchlist) ✅ DONE
+`route_after_classify` now sends `discover` to its own path. Nodes in
+[src/nodes/research/nodes.py](../../src/nodes/research/nodes.py), prompt
+[discover_sites.j2](../../src/prompts/research/discover_sites.j2).
+- **`discover_sites`** — one agent (`run_research_agent`, DISCOVER allowlist =
+  search/scrape/**map**) finds + ranks candidate sites, returns `{sites: [...]}` capped
+  at `MAX_WATCHLIST` (logged). Same robustness (tolerant exit, prose→URL fallback,
+  recorded failures). The runbook's light `frame_brief` is folded into this prompt.
+- **`approve_watchlist`** — HITL gate; resume `{approved, entries?, feedback?}` lets the
+  user keep/drop/add, with bounded re-discovery on rejection (mirrors the brief gate).
+- **`write_watchlist`** — writes `watchlist.jsonl` with **empty scrape state**
+  (`added_at` stamped; `last_scraped_at`/`last_content_hash` unset) so R2's first run
+  treats every site as new, and scaffolds an empty `report.md`/`brief.md` so the same
+  ticket re-run as `continuous` is ready.
+- **Done-when (verified — 261 tests pass incl. `test_discover_ticket_runs_end_to_end`;
+  ruff + pyright clean):** a `discover` ticket yields an approved `watchlist.jsonl` that
+  R2 consumes unchanged. Manual:
+  [notebooks/phaseR3_playground.ipynb](../../notebooks/phaseR3_playground.ipynb).
 
 ### Phase R4 — Deferred to v2: the rigor layer
 Build only after a baseline v1 run is trusted. This is the `investigate`/`verify_claims`
@@ -289,9 +299,11 @@ machinery explained in [docs/runbooks/research.md](../runbooks/research.md) and 
 
 - **`frame_brief` depth in v1** — how much decomposition does a single-agent run need?
   Maybe just a sharp question + `done-when`, with the agent self-organizing the rest.
-- **Continuous folder identity (R2)** — R1 keys the output folder on `<ticket-id>-<slug>`
-  (collision-free, stable per ticket). For `continuous` to find a prior report, a
-  recurring ticket must keep a stable id — or R2 needs a separate key (topic / recurring-id).
+- **Continuous folder identity (R2/R3)** — the output folder is keyed `<ticket-id>-<title-slug>`
+  (collision-free, stable per ticket). For `continuous` to find its prior report — and for
+  the `discover`→`continuous` handoff to land in the same folder — the ticket must keep a
+  stable **id _and_ title** across runs/mode flips. A title rename orphans the folder; if
+  that becomes a problem, switch to an id-only key (or a topic/recurring-id).
 - **Research-agent timeout & progress** — a scrape+reason+write run far exceeds the
   600s `run_agent` default (continuous multi-site scrapes more so). Pick a research
   timeout and whether to stream progress.
